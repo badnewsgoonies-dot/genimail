@@ -1,6 +1,4 @@
-from dataclasses import dataclass
-from tkinter import BOTH, Frame, Toplevel
-from uuid import uuid4
+from tkinter import BOTH
 
 from genimail.browser.errors import (
     BrowserFeatureUnavailableError,
@@ -10,21 +8,14 @@ from genimail.browser.navigation import validate_url
 from genimail.browser.runtime import BrowserRuntimeStatus, detect_browser_runtime
 
 
-@dataclass(frozen=True)
-class BrowserTabHandle:
-    tab_id: str
-    title: str
-
-
 class BrowserController:
-    """WebView2-backed browser host for embedded and popup tabs."""
+    """WebView2-backed browser host for a single embedded surface."""
 
     def __init__(self, root, bg_color="#ffffff"):
         self.root = root
         self.bg_color = bg_color
         self._main_parent = None
         self._main_view = None
-        self._tabs = {}
         self.runtime_info = detect_browser_runtime()
 
     def start(self, parent_frame) -> None:
@@ -38,6 +29,9 @@ class BrowserController:
         self._main_view = self._create_webview(parent_frame)
         self._main_view.pack(fill=BOTH, expand=True)
 
+    def is_initialized(self) -> bool:
+        return self._main_view is not None
+
     def show_main(self):
         if self._main_view is not None:
             self._main_view.pack(fill=BOTH, expand=True)
@@ -46,60 +40,66 @@ class BrowserController:
         if self._main_view is not None:
             self._main_view.pack_forget()
 
-    def load_html(self, html: str, base_url: str | None = None, tab_id: str | None = None) -> None:
-        view = self._resolve_view(tab_id)
+    def load_html(self, html: str, base_url: str | None = None) -> None:
+        view = self._resolve_view()
         try:
             view.load_html(html, base_url)
         except Exception as exc:
             raise BrowserNavigationError(f"Could not render HTML: {exc}") from exc
 
-    def load_url(self, url: str, tab_id: str | None = None) -> None:
-        view = self._resolve_view(tab_id)
+    def load_url(self, url: str) -> None:
+        view = self._resolve_view()
         safe_url = validate_url(url)
         try:
             view.load_url(safe_url)
         except Exception as exc:
             raise BrowserNavigationError(f"Could not open URL: {exc}") from exc
 
-    def open_new_tab(self, label: str) -> BrowserTabHandle:
-        self._ensure_runtime_ready()
-        tab_id = f"tab-{uuid4().hex[:10]}"
-        win = Toplevel(self.root)
-        win.title(label or "Browser")
-        win.geometry("1000x760")
-        win.configure(bg=self.bg_color)
-
-        host = Frame(win, bg=self.bg_color)
-        host.pack(fill=BOTH, expand=True)
-        view = self._create_webview(host)
-        view.pack(fill=BOTH, expand=True)
-
-        self._tabs[tab_id] = {"window": win, "view": view}
-        win.protocol("WM_DELETE_WINDOW", lambda tab=tab_id: self.close_tab(tab))
-        return BrowserTabHandle(tab_id=tab_id, title=label or "Browser")
-
-    def close_tab(self, tab_id: str) -> None:
-        item = self._tabs.pop(tab_id, None)
-        if not item:
-            return
-        window = item.get("window")
-        if window is not None:
-            try:
-                window.destroy()
-            except Exception:
-                pass
-
-    def get_current_url(self, tab_id: str | None = None) -> str | None:
-        view = self._resolve_view(tab_id)
+    def get_current_url(self) -> str | None:
+        view = self._resolve_view()
         try:
             return view.get_url()
         except Exception:
             return None
 
+    def go_back(self) -> bool:
+        view = self._resolve_view()
+        core = getattr(view, "core", None)
+        if core is None:
+            return False
+        try:
+            if core.CanGoBack:
+                core.GoBack()
+                return True
+        except Exception:
+            return False
+        return False
+
+    def go_forward(self) -> bool:
+        view = self._resolve_view()
+        core = getattr(view, "core", None)
+        if core is None:
+            return False
+        try:
+            if core.CanGoForward:
+                core.GoForward()
+                return True
+        except Exception:
+            return False
+        return False
+
+    def reload(self) -> bool:
+        view = self._resolve_view()
+        core = getattr(view, "core", None)
+        if core is None:
+            return False
+        try:
+            core.Reload()
+            return True
+        except Exception:
+            return False
+
     def dispose(self) -> None:
-        for tab_id in list(self._tabs.keys()):
-            self.close_tab(tab_id)
-        self._tabs.clear()
         if self._main_view is not None:
             try:
                 self._main_view.destroy()
@@ -108,13 +108,8 @@ class BrowserController:
         self._main_view = None
         self._main_parent = None
 
-    def _resolve_view(self, tab_id: str | None):
+    def _resolve_view(self):
         self._ensure_runtime_ready()
-        if tab_id:
-            item = self._tabs.get(tab_id)
-            if not item:
-                raise BrowserNavigationError(f"Browser tab does not exist: {tab_id}")
-            return item["view"]
         if self._main_view is None:
             raise BrowserNavigationError("Browser main view is not initialized.")
         return self._main_view
@@ -130,4 +125,3 @@ class BrowserController:
         if self.runtime_info.status == BrowserRuntimeStatus.READY:
             return
         raise BrowserFeatureUnavailableError(self.runtime_info.detail)
-

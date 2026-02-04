@@ -869,6 +869,11 @@ class EmailApp:
         self.cloud_link_cache = {}   # msg_id -> list of cloud/external PDF links
         self.known_ids = set()       # tracked message IDs for smarter polling
         self._poll_failures = 0      # consecutive poll failure count for backoff
+        self._browser_runtime_notified = False
+        self._browser_controller = None
+        self._browser_tab_controller = None
+        self._raw_html_content = None
+        self._plain_fallback_content = ""
 
         # SQLite persistent cache
         self.cache = EmailCache()
@@ -1157,99 +1162,157 @@ class EmailApp:
 
     # -- Web View Methods --
 
-    def _switch_view_mode_v2(self):
-        """Switch between plain text and embedded WebView2 view."""
-        mode = (self.view_mode.get() or "").strip().lower()
-
-        if mode == "plain":
-            if self._browser_controller is not None:
-                self._browser_controller.hide_main()
-            self.preview_scrollbar.pack(side=RIGHT, fill=Y)
-            self.preview_body.pack(fill=BOTH, expand=True)
-            return
-
-        if mode == "html":
-            self.view_mode.set("Web")
-            mode = "web"
-
-        if mode != "web":
-            self.view_mode.set("Plain")
-            return
-
-        if not self._ensure_browser_controller():
-            self.view_mode.set("Plain")
-            return
-
-        self.preview_body.pack_forget()
-        self.preview_scrollbar.pack_forget()
-        self._browser_controller.show_main()
-        self._render_html_preview()
-
-    def _ensure_browser_controller(self):
-        """Create embedded WebView2 host on first use."""
+    def _activate_email_rich_view(self):
+        self.preview_fallback_frame.pack_forget()
+        self.email_browser_host.pack(fill=BOTH, expand=True)
         if self._browser_controller is not None:
+            self._browser_controller.show_main()
+
+    def _show_plain_fallback(self, text, status_message=None):
+        if self._browser_controller is not None:
+            self._browser_controller.hide_main()
+        self.email_browser_host.pack_forget()
+        self.preview_fallback_frame.pack(fill=BOTH, expand=True)
+        self.preview_body.config(state=NORMAL)
+        self.preview_body.delete("1.0", END)
+        self.preview_body.insert("1.0", text or "")
+        self.preview_body.config(state=DISABLED)
+        if status_message:
+            self.status_var.set(status_message)
+
+    def _ensure_browser_controller(self, notify=True):
+        """Create rich email embedded WebView2 host on first use."""
+        if self._browser_controller is not None and self._browser_controller.is_initialized():
             return True
+        if self._browser_controller is not None and not self._browser_controller.is_initialized():
+            self._browser_controller = None
 
         try:
             self._browser_controller = BrowserController(self.root, bg_color=T.BG_SURFACE)
-            self._browser_controller.start(self.body_container)
+            self._browser_controller.start(self.email_browser_host)
             return True
         except BrowserFeatureUnavailableError as exc:
-            messagebox.showerror(
-                "WebView2 Unavailable",
-                f"{exc}\n\nInstall dependencies:\n  pip install tkwebview2",
-                parent=self.root,
-            )
+            if notify and not self._browser_runtime_notified:
+                messagebox.showerror(
+                    "WebView2 Unavailable",
+                    f"{exc}\n\nInstall dependencies:\n  pip install tkwebview2 pywebview",
+                    parent=self.root,
+                )
+                self._browser_runtime_notified = True
             self.status_var.set("Web view unavailable")
+            self._browser_controller = None
             return False
         except Exception as e:
-            print(f"[WEBVIEW] Error creating browser host: {e}")
-            messagebox.showerror("WebView2 Error", str(e), parent=self.root)
+            print(f"[WEBVIEW] Error creating email browser host: {e}")
+            if notify:
+                messagebox.showerror("WebView2 Error", str(e), parent=self.root)
+            self._browser_controller = None
             return False
 
-    def _switch_view_mode(self):
-        """Compatibility wrapper for legacy callback names."""
-        self._switch_view_mode_v2()
+    def _ensure_browser_tab_controller(self, notify=True):
+        """Create Browser tab embedded WebView2 host on first use."""
+        if self._browser_tab_controller is not None and self._browser_tab_controller.is_initialized():
+            return True
+        if self._browser_tab_controller is not None and not self._browser_tab_controller.is_initialized():
+            self._browser_tab_controller = None
+
+        try:
+            self._browser_tab_controller = BrowserController(self.root, bg_color=T.BG_SURFACE)
+            self._browser_tab_controller.start(self.browser_host)
+            return True
+        except BrowserFeatureUnavailableError as exc:
+            if notify and not self._browser_runtime_notified:
+                messagebox.showerror(
+                    "WebView2 Unavailable",
+                    f"{exc}\n\nInstall dependencies:\n  pip install tkwebview2 pywebview",
+                    parent=self.root,
+                )
+                self._browser_runtime_notified = True
+            self.status_var.set("Browser tab unavailable")
+            self._browser_tab_controller = None
+            return False
+        except Exception as e:
+            print(f"[WEBVIEW] Error creating browser tab host: {e}")
+            if notify:
+                messagebox.showerror("WebView2 Error", str(e), parent=self.root)
+            self._browser_tab_controller = None
+            return False
 
     def _render_html_preview(self):
-        """Render message content in embedded WebView2."""
-        if self._browser_controller is None or not self.current_message:
+        """Render message content rich-first with plain fallback only on failure."""
+        if not self.current_message:
             return
 
-        if self._raw_html_content:
-            try:
-                self._browser_controller.load_html(self._raw_html_content)
-            except Exception as e:
-                print(f"[WEBVIEW] Render error: {e}")
-                self.view_mode.set("Plain")
-                self._switch_view_mode_v2()
-        else:
-            body_preview = self.current_message.get("bodyPreview", "")
-            try:
-                self._browser_controller.load_html(wrap_plain_text_as_html(body_preview))
-            except Exception:
-                pass
+        content = self._raw_html_content or wrap_plain_text_as_html(
+            self.current_message.get("bodyPreview", "")
+        )
+        plain_fallback = self._plain_fallback_content or self.current_message.get("bodyPreview", "")
+
+        if not self._ensure_browser_controller(notify=False):
+            self._show_plain_fallback(plain_fallback, "Rich preview unavailable; using plain fallback")
+            return
+
+        try:
+            self._activate_email_rich_view()
+            self._browser_controller.load_html(content)
+        except Exception as e:
+            print(f"[WEBVIEW] Rich preview render failed: {e}")
+            self._show_plain_fallback(plain_fallback, "Rich preview failed; using plain fallback")
 
     def _open_in_browser(self):
-        """Open current email in a dedicated in-app web tab."""
+        """Open current email content in the built-in Browser tab."""
         if not self.current_message:
             messagebox.showinfo("No Email", "Select an email first.", parent=self.root)
             return
 
-        if not self._ensure_browser_controller():
+        if not self._ensure_browser_tab_controller():
             return
 
-        content = self._raw_html_content
-        if not content:
-            body_preview = self.current_message.get("bodyPreview", "")
-            content = wrap_plain_text_as_html(body_preview)
-
+        content = self._raw_html_content or wrap_plain_text_as_html(
+            self.current_message.get("bodyPreview", "")
+        )
         try:
-            tab = self._browser_controller.open_new_tab("Email Web View")
-            self._browser_controller.load_html(content, tab_id=tab.tab_id)
-            self.status_var.set("Opened web tab")
+            self._browser_tab_controller.load_html(content)
+            self.preview_notebook.select(self.browser_tab)
+            self.browser_url_var.set("about:message")
+            self.status_var.set("Opened in Browser tab")
         except Exception as e:
-            messagebox.showerror("Error", f"Could not open in web tab:\n{e}", parent=self.root)
+            messagebox.showerror("Error", f"Could not open in Browser tab:\n{e}", parent=self.root)
+
+    def _on_browser_go(self):
+        raw = (self.browser_url_var.get() or "").strip()
+        if not raw:
+            return
+        url = raw if "://" in raw else f"https://{raw}"
+        if not self._ensure_browser_tab_controller():
+            return
+        try:
+            self._browser_tab_controller.load_url(url)
+            self.preview_notebook.select(self.browser_tab)
+            self.browser_url_var.set(url)
+            self.status_var.set(f"Opened {url}")
+        except Exception as e:
+            messagebox.showerror("Browser Error", str(e), parent=self.root)
+
+    def _on_browser_back(self):
+        if not self._ensure_browser_tab_controller():
+            return
+        moved = self._browser_tab_controller.go_back()
+        if moved:
+            self.status_var.set("Browser: back")
+
+    def _on_browser_forward(self):
+        if not self._ensure_browser_tab_controller():
+            return
+        moved = self._browser_tab_controller.go_forward()
+        if moved:
+            self.status_var.set("Browser: forward")
+
+    def _on_browser_reload(self):
+        if not self._ensure_browser_tab_controller():
+            return
+        self._browser_tab_controller.reload()
+        self.status_var.set("Browser: reloaded")
 
     def _on_list_scroll(self, event):
         """Handle mouse wheel scrolling with virtual scroll."""
@@ -1798,23 +1861,24 @@ class EmailApp:
         self.preview_date.config(text=format_date(msg.get("receivedDateTime", "")))
         self.preview_to.config(text="")
 
-        # Clear raw HTML until full body loads
-        self._raw_html_content = None
+        # Build a rich placeholder while full body loads.
+        self._raw_html_content = wrap_plain_text_as_html(msg.get("bodyPreview", "Loading..."))
+        self._plain_fallback_content = msg.get("bodyPreview", "Loading...")
 
         # Use bodyPreview (already available from list data) as placeholder
         preview_text = msg.get("bodyPreview", "Loading...")
-        self.preview_body.config(state=NORMAL)
-        self.preview_body.delete("1.0", END)
-        self.preview_body.insert("1.0", preview_text)
-        self.preview_body.config(state=DISABLED)
-
-        # If in Web mode, show loading message
-        if (self.view_mode.get() or "").strip().lower() == "web" and self._browser_controller is not None:
+        loading_html = (
+            "<html><body><p style='color: #888; font-family: Segoe UI;'>"
+            "Loading email content...</p></body></html>"
+        )
+        if self._ensure_browser_controller(notify=False):
             try:
-                loading_html = f"<html><body><p style='color: #888; font-family: Segoe UI;'>Loading email content...</p></body></html>"
+                self._activate_email_rich_view()
                 self._browser_controller.load_html(loading_html)
             except Exception:
-                pass
+                self._show_plain_fallback(preview_text, "Rich preview failed; using plain fallback")
+        else:
+            self._show_plain_fallback(preview_text, "Rich preview unavailable; using plain fallback")
 
         # Hide attachments while loading
         for w in self.att_frame.winfo_children():
@@ -1879,13 +1943,14 @@ class EmailApp:
         raw_content = body.get("content", "")
         content_type = body.get("contentType", "")
         
-        # Store raw HTML for Web view
+        # Prepare rich-first + plain fallback payloads.
         if content_type.lower() == "html":
             self._raw_html_content = raw_content
             plain_content = strip_html(raw_content)
         else:
-            self._raw_html_content = None
+            self._raw_html_content = wrap_plain_text_as_html(raw_content)
             plain_content = raw_content
+        self._plain_fallback_content = plain_content
 
         # Cache the message body for offline access
         if raw_content and not msg.get("_fromCache"):
@@ -1894,18 +1959,9 @@ class EmailApp:
             except Exception:
                 pass
 
-        # Update the appropriate view based on current mode
+        # Rich-first view with automatic plain fallback.
         self.current_message = msg
-        
-        if (self.view_mode.get() or "").strip().lower() == "web" and self._browser_controller is not None:
-            # Update web view
-            self._render_html_preview()
-        
-        # Always update plain text view (it's the fallback)
-        self.preview_body.config(state=NORMAL)
-        self.preview_body.delete("1.0", END)
-        self.preview_body.insert("1.0", plain_content)
-        self.preview_body.config(state=DISABLED)
+        self._render_html_preview()
 
         # Attachments
         for w in self.att_frame.winfo_children():
@@ -2390,6 +2446,8 @@ class EmailApp:
             self.root.after_cancel(self._poll_id)
         if self._browser_controller is not None:
             self._browser_controller.dispose()
+        if self._browser_tab_controller is not None:
+            self._browser_tab_controller.dispose()
         self.root.destroy()
 
 
