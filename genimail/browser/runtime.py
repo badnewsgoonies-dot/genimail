@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import importlib
 
 from genimail.constants import BROWSER_RUNTIME_INSTALL_URL
 
@@ -17,9 +18,23 @@ class BrowserRuntimeInfo:
     engine: str = "webview2"
 
 
+def _resolve_have_runtime():
+    errors = []
+    for module_name in ("tkwebview2", "tkwebview2.tkwebview2"):
+        try:
+            module = importlib.import_module(module_name)
+            candidate = getattr(module, "have_runtime", None)
+            if callable(candidate):
+                return candidate
+            errors.append(f"{module_name}.have_runtime not found")
+        except Exception as exc:
+            errors.append(f"{module_name}: {exc}")
+    raise RuntimeError("; ".join(errors))
+
+
 def detect_browser_runtime() -> BrowserRuntimeInfo:
     try:
-        from tkwebview2 import have_runtime
+        have_runtime = _resolve_have_runtime()
     except Exception as exc:
         return BrowserRuntimeInfo(
             status=BrowserRuntimeStatus.INIT_FAILED,
