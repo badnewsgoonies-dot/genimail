@@ -1,3 +1,5 @@
+import types
+
 import pytest
 
 from genimail.browser.errors import BrowserFeatureUnavailableError
@@ -71,3 +73,24 @@ def test_browser_controller_navigation_helpers(monkeypatch):
     assert controller.reload() is True
     assert core.reload_calls == 1
     assert controller.get_current_url() == "https://example.com"
+
+
+def test_apply_edgechrome_compat_patch_adds_web_view_alias(monkeypatch):
+    from genimail.browser import host
+
+    class FakeEdgeChrome:
+        pass
+
+    fake_module = types.SimpleNamespace(EdgeChrome=FakeEdgeChrome)
+
+    def fake_import_module(name):
+        if name == "webview.platforms.edgechromium":
+            return fake_module
+        raise ImportError(name)
+
+    monkeypatch.setattr(host.importlib, "import_module", fake_import_module)
+    host._apply_edgechrome_compat_patch()
+
+    instance = FakeEdgeChrome()
+    instance.webview = "fake-control"
+    assert instance.web_view == "fake-control"

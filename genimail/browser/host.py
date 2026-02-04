@@ -1,3 +1,5 @@
+import importlib
+
 from tkinter import BOTH
 
 from genimail.browser.errors import (
@@ -115,6 +117,7 @@ class BrowserController:
         return self._main_view
 
     def _create_webview(self, parent):
+        _apply_edgechrome_compat_patch()
         from tkwebview2.tkwebview2 import WebView2
 
         width = max(int(parent.winfo_width() or parent.winfo_reqwidth() or 900), 320)
@@ -125,3 +128,18 @@ class BrowserController:
         if self.runtime_info.status == BrowserRuntimeStatus.READY:
             return
         raise BrowserFeatureUnavailableError(self.runtime_info.detail)
+
+
+def _apply_edgechrome_compat_patch():
+    """Bridge tkwebview2 expectations across pywebview EdgeChrome versions."""
+    try:
+        module = importlib.import_module("webview.platforms.edgechromium")
+    except Exception:
+        return
+
+    edge_chrome = getattr(module, "EdgeChrome", None)
+    if edge_chrome is None:
+        return
+
+    if not hasattr(edge_chrome, "web_view"):
+        edge_chrome.web_view = property(lambda self: getattr(self, "webview", None))
