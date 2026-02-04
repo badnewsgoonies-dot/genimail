@@ -1274,7 +1274,7 @@ class EmailApp:
         try:
             self._browser_tab_controller.load_html(content)
             self.preview_notebook.select(self.browser_tab)
-            self.browser_url_var.set("about:message")
+            self.browser_url_var.set("https://")
             self.status_var.set("Opened in Browser tab")
         except Exception as e:
             messagebox.showerror("Error", f"Could not open in Browser tab:\n{e}", parent=self.root)
@@ -1300,6 +1300,8 @@ class EmailApp:
         moved = self._browser_tab_controller.go_back()
         if moved:
             self.status_var.set("Browser: back")
+        else:
+            self.status_var.set("Browser: no back history")
 
     def _on_browser_forward(self):
         if not self._ensure_browser_tab_controller():
@@ -1307,12 +1309,16 @@ class EmailApp:
         moved = self._browser_tab_controller.go_forward()
         if moved:
             self.status_var.set("Browser: forward")
+        else:
+            self.status_var.set("Browser: no forward history")
 
     def _on_browser_reload(self):
         if not self._ensure_browser_tab_controller():
             return
-        self._browser_tab_controller.reload()
-        self.status_var.set("Browser: reloaded")
+        if self._browser_tab_controller.reload():
+            self.status_var.set("Browser: reloaded")
+        else:
+            self.status_var.set("Browser: reload unavailable")
 
     def _on_list_scroll(self, event):
         """Handle mouse wheel scrolling with virtual scroll."""
