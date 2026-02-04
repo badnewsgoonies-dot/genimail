@@ -17,39 +17,33 @@ from tkinter import ttk
 import os
 
 from genimail.ui.theme import T
-from genimail.ui.widgets import PillToggle, WarmButton
+from genimail.ui.widgets import WarmButton
 
 
 def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
-    """Build the email/pdf/scan notebook tabs for the preview panel."""
+    """Build the email/pdf/scan/browser notebook tabs for the preview panel."""
     app.preview_notebook = ttk.Notebook(app.preview_panel)
     app.preview_notebook.pack(fill=BOTH, expand=True)
 
     app.email_tab = Frame(app.preview_notebook, bg=T.BG_SURFACE)
     app.pdf_tab = Frame(app.preview_notebook, bg=T.BG_SURFACE)
     app.scan_tab = Frame(app.preview_notebook, bg=T.BG_SURFACE)
+    app.browser_tab = Frame(app.preview_notebook, bg=T.BG_SURFACE)
     app.preview_notebook.add(app.email_tab, text="Email")
     app.preview_notebook.add(app.pdf_tab, text="PDF")
     app.preview_notebook.add(app.scan_tab, text="Scan")
+    app.preview_notebook.add(app.browser_tab, text="Browser")
 
-    view_toggle = Frame(app.email_tab, bg=T.BG_MUTED, padx=12, pady=6)
-    view_toggle.pack(fill=X)
+    email_toolbar = Frame(app.email_tab, bg=T.BG_MUTED, padx=12, pady=6)
+    email_toolbar.pack(fill=X)
 
-    app.view_mode = StringVar(value="Plain")
     app._browser_controller = None
+    app._browser_tab_controller = None
     app._raw_html_content = None
-
-    PillToggle(
-        view_toggle,
-        app.view_mode,
-        ["Plain", "Web"],
-        width=140,
-        bg=T.BG_MUTED,
-    ).pack(side=LEFT)
-    app.view_mode.trace_add("write", lambda *args: app._switch_view_mode_v2())
+    app._plain_fallback_content = ""
 
     open_browser_lbl = Label(
-        view_toggle,
+        email_toolbar,
         text="Open Web Tab",
         font=T.FONT_SMALL,
         bg=T.BG_MUTED,
@@ -64,8 +58,12 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
     app.body_container = Frame(app.email_tab, bg=T.BG_SURFACE)
     app.body_container.pack(fill=BOTH, expand=True)
 
+    app.email_browser_host = Frame(app.body_container, bg=T.BG_SURFACE)
+    app.email_browser_host.pack(fill=BOTH, expand=True)
+
+    app.preview_fallback_frame = Frame(app.body_container, bg=T.BG_SURFACE)
     app.preview_body = Text(
-        app.body_container,
+        app.preview_fallback_frame,
         font=T.FONT_BODY,
         wrap=WORD,
         relief=FLAT,
@@ -76,11 +74,12 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
         state="disabled",
         cursor="arrow",
     )
-    preview_sb = Scrollbar(app.body_container, orient=VERTICAL, command=app.preview_body.yview)
+    preview_sb = Scrollbar(app.preview_fallback_frame, orient=VERTICAL, command=app.preview_body.yview)
     app.preview_body.configure(yscrollcommand=preview_sb.set)
     app.preview_scrollbar = preview_sb
     preview_sb.pack(side=RIGHT, fill="y")
     app.preview_body.pack(fill=BOTH, expand=True)
+    app.preview_fallback_frame.pack_forget()
 
     app.att_frame = Frame(app.email_tab, bg=T.BG_MUTED, padx=12, pady=8)
 
@@ -177,4 +176,53 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
         scan_host.grid(row=0, column=0, sticky="nsew")
         app.scanner_app = scanner_cls(scan_host)
 
-    app._switch_view_mode_v2()
+    browser_toolbar = Frame(app.browser_tab, bg=T.BG_MUTED, padx=8, pady=6)
+    browser_toolbar.pack(fill=X)
+    WarmButton(
+        browser_toolbar,
+        "Back",
+        app._on_browser_back,
+        primary=False,
+        width=64,
+        height=30,
+        bg=T.BG_MUTED,
+    ).pack(side=LEFT)
+    WarmButton(
+        browser_toolbar,
+        "Forward",
+        app._on_browser_forward,
+        primary=False,
+        width=76,
+        height=30,
+        bg=T.BG_MUTED,
+    ).pack(side=LEFT, padx=(6, 0))
+    WarmButton(
+        browser_toolbar,
+        "Reload",
+        app._on_browser_reload,
+        primary=False,
+        width=70,
+        height=30,
+        bg=T.BG_MUTED,
+    ).pack(side=LEFT, padx=(6, 8))
+
+    app.browser_url_var = StringVar(value="https://")
+    browser_url_entry = ttk.Entry(browser_toolbar, textvariable=app.browser_url_var)
+    browser_url_entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
+    browser_url_entry.bind("<Return>", lambda e: app._on_browser_go())
+    app.browser_url_entry = browser_url_entry
+
+    WarmButton(
+        browser_toolbar,
+        "Go",
+        app._on_browser_go,
+        primary=True,
+        width=48,
+        height=30,
+        bg=T.BG_MUTED,
+    ).pack(side=RIGHT)
+
+    app.browser_host = Frame(app.browser_tab, bg=T.BG_SURFACE)
+    app.browser_host.pack(fill=BOTH, expand=True)
+
+    app._activate_email_rich_view()

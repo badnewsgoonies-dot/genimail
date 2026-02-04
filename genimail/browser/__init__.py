@@ -7,7 +7,7 @@ from genimail.browser.errors import (
     BrowserNavigationError,
     BrowserRuntimeError,
 )
-from genimail.browser.host import BrowserController, BrowserTabHandle
+from genimail.browser.host import BrowserController
 from genimail.browser.runtime import (
     BrowserRuntimeInfo,
     BrowserRuntimeStatus,
@@ -22,7 +22,6 @@ __all__ = [
     "BrowserRuntimeError",
     "BrowserRuntimeInfo",
     "BrowserRuntimeStatus",
-    "BrowserTabHandle",
     "DownloadResult",
     "detect_browser_runtime",
     "download_url_content",
