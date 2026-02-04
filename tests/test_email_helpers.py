@@ -3,6 +3,7 @@ import os
 
 from genimail.constants import DEFAULT_CLIENT_ID
 from genimail.domain.helpers import (
+    build_reply_recipients,
     domain_to_company,
     format_date,
     format_size,
@@ -74,3 +75,41 @@ def test_format_size_thresholds():
     assert format_size(512) == "512 B"
     assert format_size(2048) == "2.0 KB"
     assert format_size(5 * 1024 * 1024) == "5.0 MB"
+
+
+def test_build_reply_recipients_reply_mode():
+    message = {
+        "from": {"emailAddress": {"address": "sender@example.com"}},
+        "toRecipients": [{"emailAddress": {"address": "me@example.com"}}],
+        "ccRecipients": [{"emailAddress": {"address": "cc@example.com"}}],
+    }
+    to_list, cc_list = build_reply_recipients(
+        message,
+        current_user_email="me@example.com",
+        include_all=False,
+    )
+    assert to_list == ["sender@example.com"]
+    assert cc_list == []
+
+
+def test_build_reply_recipients_reply_all_mode_deduplicates():
+    message = {
+        "from": {"emailAddress": {"address": "sender@example.com"}},
+        "toRecipients": [
+            {"emailAddress": {"address": "me@example.com"}},
+            {"emailAddress": {"address": "other@example.com"}},
+            {"emailAddress": {"address": "SENDER@example.com"}},
+        ],
+        "ccRecipients": [
+            {"emailAddress": {"address": "copy@example.com"}},
+            {"emailAddress": {"address": "other@example.com"}},
+            {"emailAddress": {"address": "ME@example.com"}},
+        ],
+    }
+    to_list, cc_list = build_reply_recipients(
+        message,
+        current_user_email="me@example.com",
+        include_all=True,
+    )
+    assert to_list == ["sender@example.com", "other@example.com"]
+    assert cc_list == ["copy@example.com"]

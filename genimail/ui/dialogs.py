@@ -29,7 +29,7 @@ from tkinter import (
 from tkinter import ttk
 
 from genimail.constants import APP_NAME
-from genimail.domain.helpers import format_date, format_size, strip_html
+from genimail.domain.helpers import build_reply_recipients, format_date, format_size, strip_html
 from genimail.domain.quotes import (
     build_quote_context,
     create_quote_doc,
@@ -150,6 +150,7 @@ class ComposeWindow:
         graph_client,
         mode="new",
         reply_msg=None,
+        user_email="",
         on_sent=None,
         config=None,
         status_callback=None,
@@ -157,6 +158,7 @@ class ComposeWindow:
         self.graph = graph_client
         self.mode = mode
         self.reply_msg = reply_msg
+        self.user_email = user_email
         self.on_sent = on_sent
         self.config = config
         self.status_callback = status_callback
@@ -166,7 +168,7 @@ class ComposeWindow:
 
         self.win = Toplevel(parent)
         self.win.title(
-            f"{'Reply' if mode == 'reply' else 'Forward' if mode == 'forward' else 'New Email'} - {APP_NAME}"
+            f"{'Reply All' if mode == 'reply_all' else 'Reply' if mode == 'reply' else 'Forward' if mode == 'forward' else 'New Email'} - {APP_NAME}"
         )
         self.win.geometry("680x580")
         self.win.minsize(520, 420)
@@ -313,13 +315,32 @@ class ComposeWindow:
         )
         self.body_text.pack(fill=BOTH, expand=True)
 
-        if mode in ("reply", "forward") and reply_msg:
+        if mode in ("reply", "reply_all", "forward") and reply_msg:
             sender = reply_msg.get("from", {}).get("emailAddress", {})
             to_email = sender.get("address", "")
-            self.to_var.set(to_email if mode == "reply" else "")
+
+            if mode == "reply":
+                to_list, cc_list = build_reply_recipients(
+                    reply_msg,
+                    current_user_email=self.user_email,
+                    include_all=False,
+                )
+                self.to_var.set("; ".join(to_list))
+                self.cc_var.set("")
+            elif mode == "reply_all":
+                to_list, cc_list = build_reply_recipients(
+                    reply_msg,
+                    current_user_email=self.user_email,
+                    include_all=True,
+                )
+                self.to_var.set("; ".join(to_list))
+                self.cc_var.set("; ".join(cc_list))
+            else:
+                self.to_var.set("")
+                self.cc_var.set("")
 
             subj = reply_msg.get("subject", "")
-            if mode == "reply" and not subj.lower().startswith("re:"):
+            if mode in ("reply", "reply_all") and not subj.lower().startswith("re:"):
                 subj = f"Re: {subj}"
             elif mode == "forward" and not subj.lower().startswith("fw:"):
                 subj = f"Fw: {subj}"
@@ -516,7 +537,8 @@ class ComposeWindow:
                     subject,
                     body,
                     attachments=attachments or None,
-                    reply_to_id=(self.reply_msg.get("id") if self.mode == "reply" and self.reply_msg else None),
+                    reply_to_id=(self.reply_msg.get("id") if self.mode in ("reply", "reply_all") and self.reply_msg else None),
+                    reply_mode=self.mode,
                 )
                 self.win.after(0, self._on_send_success)
             except Exception as e:

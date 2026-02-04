@@ -181,7 +181,16 @@ class GraphClient:
     def mark_read(self, message_id, is_read=True):
         self._patch(f"{GRAPH_BASE}/me/messages/{message_id}", {"isRead": is_read})
 
-    def send_mail(self, to_list, cc_list, subject, body, attachments=None, reply_to_id=None):
+    def send_mail(
+        self,
+        to_list,
+        cc_list,
+        subject,
+        body,
+        attachments=None,
+        reply_to_id=None,
+        reply_mode=None,
+    ):
         message = {
             "subject": subject,
             "body": {"contentType": "Text", "content": body},
@@ -192,13 +201,10 @@ class GraphClient:
         if attachments:
             message["attachments"] = attachments
 
-        if reply_to_id:
-            self._post(
-                f"{GRAPH_BASE}/me/messages/{reply_to_id}/reply",
-                {"message": {"toRecipients": message["toRecipients"]}, "comment": body},
-            )
-        else:
-            self._post(f"{GRAPH_BASE}/me/sendMail", {"message": message, "saveToSentItems": True})
+        # Use sendMail for all compose modes so edited recipients/subject/body/attachments
+        # are transmitted exactly as composed.
+        _ = reply_to_id, reply_mode
+        self._post(f"{GRAPH_BASE}/me/sendMail", {"message": message, "saveToSentItems": True})
 
     def move_message(self, message_id, destination_folder_id):
         self._post(f"{GRAPH_BASE}/me/messages/{message_id}/move", {"destinationId": destination_folder_id})

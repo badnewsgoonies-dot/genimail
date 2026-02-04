@@ -94,3 +94,46 @@ def format_size(size_bytes):
         return f"{size_bytes / 1024:.1f} KB"
     return f"{size_bytes / (1024 * 1024):.1f} MB"
 
+
+def build_reply_recipients(reply_msg, current_user_email="", include_all=False):
+    """Build To/CC recipient lists for reply or reply-all composition."""
+    sender = (reply_msg or {}).get("from", {}).get("emailAddress", {})
+    sender_addr = (sender.get("address") or "").strip()
+    current_user = (current_user_email or "").strip().lower()
+
+    to_recipients = []
+    cc_recipients = []
+    seen_to = set()
+
+    def _add_to(address):
+        addr = (address or "").strip()
+        if not addr:
+            return
+        key = addr.lower()
+        if current_user and key == current_user:
+            return
+        if key in seen_to:
+            return
+        seen_to.add(key)
+        to_recipients.append(addr)
+
+    _add_to(sender_addr)
+
+    if include_all:
+        for recipient in (reply_msg or {}).get("toRecipients", []):
+            _add_to(recipient.get("emailAddress", {}).get("address"))
+
+        seen_cc = set(seen_to)
+        for recipient in (reply_msg or {}).get("ccRecipients", []):
+            addr = (recipient.get("emailAddress", {}).get("address") or "").strip()
+            if not addr:
+                continue
+            key = addr.lower()
+            if current_user and key == current_user:
+                continue
+            if key in seen_cc:
+                continue
+            seen_cc.add(key)
+            cc_recipients.append(addr)
+
+    return to_recipients, cc_recipients

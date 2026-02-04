@@ -98,7 +98,7 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
     WarmButton(
         app.email_action_frame,
         "Reply All",
-        lambda: app._compose("reply"),
+        lambda: app._compose("reply_all"),
         primary=False,
         width=90,
         height=32,
