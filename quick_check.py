@@ -10,6 +10,7 @@ PY_FILES = [
     "scanner_app_v4.py",
     "genimail/paths.py",
     "genimail/constants.py",
+    "genimail/com_runtime.py",
     "genimail/browser/__init__.py",
     "genimail/browser/errors.py",
     "genimail/browser/runtime.py",

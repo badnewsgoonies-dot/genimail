@@ -94,3 +94,41 @@ def test_apply_edgechrome_compat_patch_adds_web_view_alias(monkeypatch):
     instance = FakeEdgeChrome()
     instance.webview = "fake-control"
     assert instance.web_view == "fake-control"
+
+
+def test_create_webview_raises_when_sta_mode_conflicts(monkeypatch):
+    def fake_detect():
+        return BrowserRuntimeInfo(
+            status=BrowserRuntimeStatus.READY,
+            detail="ok",
+        )
+
+    from genimail.browser import host
+
+    monkeypatch.setattr(host, "detect_browser_runtime", fake_detect)
+    monkeypatch.setattr(
+        host,
+        "ensure_sta_apartment",
+        lambda: types.SimpleNamespace(ready=False, detail="mode conflict"),
+    )
+    controller = BrowserController(root=None)
+
+    class _Parent:
+        @staticmethod
+        def winfo_width():
+            return 900
+
+        @staticmethod
+        def winfo_reqwidth():
+            return 900
+
+        @staticmethod
+        def winfo_height():
+            return 560
+
+        @staticmethod
+        def winfo_reqheight():
+            return 560
+
+    with pytest.raises(BrowserFeatureUnavailableError):
+        controller._create_webview(_Parent())

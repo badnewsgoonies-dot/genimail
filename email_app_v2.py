@@ -36,7 +36,8 @@ from genimail.browser import (
     download_url_content,
     require_pdf_bytes,
 )
-from genimail.browser.navigation import wrap_plain_text_as_html
+from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
+from genimail.com_runtime import ensure_sta_apartment
 from genimail.domain.helpers import (
     domain_to_company,
     format_date,
@@ -1228,7 +1229,7 @@ class EmailApp:
         
         # Prepare rich-first + plain fallback payloads.
         if content_type.lower() == "html":
-            self._raw_html_content = raw_content
+            self._raw_html_content = ensure_light_preview_html(raw_content)
             plain_content = strip_html(raw_content)
         else:
             self._raw_html_content = wrap_plain_text_as_html(raw_content)
@@ -1742,6 +1743,10 @@ class EmailApp:
 
 
 def main():
+    com_status = ensure_sta_apartment()
+    if not com_status.ready:
+        print(f"[COM] {com_status.detail}")
+
     root = Tk()
     root.withdraw()  # Hide main window during splash
 

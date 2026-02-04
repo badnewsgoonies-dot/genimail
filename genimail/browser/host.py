@@ -8,6 +8,7 @@ from genimail.browser.errors import (
 )
 from genimail.browser.navigation import validate_url
 from genimail.browser.runtime import BrowserRuntimeStatus, detect_browser_runtime
+from genimail.com_runtime import ensure_sta_apartment
 
 
 class BrowserController:
@@ -117,6 +118,12 @@ class BrowserController:
         return self._main_view
 
     def _create_webview(self, parent):
+        com_status = ensure_sta_apartment()
+        if not com_status.ready:
+            raise BrowserFeatureUnavailableError(
+                "Embedded browser cannot start because the process is not in a valid STA COM mode. "
+                f"{com_status.detail} Close and relaunch the app."
+            )
         _apply_edgechrome_compat_patch()
         from tkwebview2.tkwebview2 import WebView2
 

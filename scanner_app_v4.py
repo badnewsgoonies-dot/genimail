@@ -790,7 +790,7 @@ class ScannerAppV4:
             
             self.root.after(0, self._add_page, page)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Scan Error", str(e)))
+            self.root.after(0, lambda err=str(e): messagebox.showerror("Scan Error", err))
         finally:
             if co_initialized:
                 try:
