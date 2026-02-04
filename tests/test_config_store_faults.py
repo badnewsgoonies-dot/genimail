@@ -14,6 +14,7 @@ def test_config_load_invalid_json_sets_error(tmp_path, monkeypatch):
 
     assert cfg.load_error
     assert cfg.get("window_geometry") == "1100x700"
+    assert cfg.get("browser_engine") == "webview2"
 
 
 def test_config_load_non_object_sets_error(tmp_path, monkeypatch):

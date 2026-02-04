@@ -5,8 +5,8 @@ python email_app_v2.py
 if errorlevel 1 (
     echo.
     echo Error: Make sure Python is installed and dependencies are available.
-    echo Required: pip install msal requests winotify pillow PyMuPDF
-    echo Optional (for HTML view): pip install tkinterweb
+    echo Required: pip install msal requests winotify pillow PyMuPDF tkwebview2 pywebview
+    echo Also ensure Microsoft Edge WebView2 Runtime is installed.
     echo.
     pause
 )

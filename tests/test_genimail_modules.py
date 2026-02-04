@@ -21,4 +21,4 @@ def test_config_defaults_include_quote_paths():
     config = Config()
     assert config.get("quote_template_path")
     assert config.get("quote_output_dir")
-
+    assert config.get("browser_engine") == "webview2"

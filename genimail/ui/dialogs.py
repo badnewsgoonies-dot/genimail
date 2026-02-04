@@ -4,6 +4,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import (
     BOTH,
+    BooleanVar,
+    Canvas,
     END,
     FLAT,
     LEFT,
@@ -13,6 +15,7 @@ from tkinter import (
     X,
     Y,
     Button,
+    Checkbutton,
     Entry,
     Frame,
     Label,
@@ -859,3 +862,120 @@ class CompanyManagerDialog:
             f"Labeled {labeled_count} emails from known companies.",
             parent=self.win,
         )
+
+
+class CloudPdfLinkDialog:
+    """Select cloud-hosted PDF links to fetch/open."""
+
+    def __init__(self, parent, links):
+        self.links = list(links or [])
+        self.result = []
+        self.vars = []
+
+        self.win = Toplevel(parent)
+        self.win.title("Linked Cloud PDFs")
+        self.win.geometry("760x420")
+        self.win.minsize(620, 320)
+        self.win.transient(parent)
+        self.win.grab_set()
+
+        main = Frame(self.win, bg=COLOR_BG_WHITE)
+        main.pack(fill=BOTH, expand=True)
+
+        header = Frame(main, bg=COLOR_BG_LIGHT, padx=12, pady=10)
+        header.pack(fill=X)
+        Label(header, text="Linked Cloud PDFs", font=FONT_HEADER, bg=COLOR_BG_LIGHT, fg=COLOR_TEXT).pack(
+            side=LEFT
+        )
+        Label(
+            header,
+            text="Select links to download and open in PDF tabs",
+            font=FONT_SMALL,
+            bg=COLOR_BG_LIGHT,
+            fg=COLOR_READ,
+        ).pack(side=RIGHT)
+
+        body = Frame(main, bg=COLOR_BG_WHITE)
+        body.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+        canvas = Canvas(body, bg=COLOR_BG_WHITE, highlightthickness=0)
+        scroll = Scrollbar(body, orient=VERTICAL, command=canvas.yview)
+        inner = Frame(canvas, bg=COLOR_BG_WHITE)
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        scroll.pack(side=RIGHT, fill=Y)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+
+        if not self.links:
+            Label(inner, text="No cloud links found in this message.", font=FONT_NORMAL, bg=COLOR_BG_WHITE).pack(
+                anchor="w", padx=8, pady=8
+            )
+        else:
+            for link in self.links:
+                row = Frame(inner, bg=COLOR_BG_WHITE, pady=5)
+                row.pack(fill=X)
+                var = BooleanVar(value=True)
+                self.vars.append(var)
+                Checkbutton(
+                    row,
+                    variable=var,
+                    bg=COLOR_BG_WHITE,
+                    activebackground=COLOR_BG_WHITE,
+                ).pack(side=LEFT, padx=(4, 8))
+                text = f"{link.get('source', 'External')}: {link.get('suggested_name', 'linked.pdf')}"
+                Label(row, text=text, font=FONT_NORMAL, bg=COLOR_BG_WHITE, fg=COLOR_TEXT).pack(side=LEFT, anchor="w")
+                Label(
+                    row,
+                    text=link.get("original_url", ""),
+                    font=FONT_SMALL,
+                    bg=COLOR_BG_WHITE,
+                    fg=COLOR_READ,
+                    wraplength=560,
+                    justify=LEFT,
+                ).pack(side=LEFT, anchor="w", padx=(10, 0))
+
+        footer = Frame(main, bg=COLOR_BG_WHITE, padx=12, pady=10)
+        footer.pack(fill=X)
+        WarmButton(footer, "Select All", self._select_all, primary=False, width=90, height=30, bg=COLOR_BG_WHITE).pack(
+            side=LEFT
+        )
+        WarmButton(footer, "Clear", self._clear_all, primary=False, width=70, height=30, bg=COLOR_BG_WHITE).pack(
+            side=LEFT, padx=(8, 0)
+        )
+        WarmButton(
+            footer, "Cancel", self._cancel, primary=False, width=80, height=30, bg=COLOR_BG_WHITE
+        ).pack(side=RIGHT)
+        WarmButton(
+            footer,
+            "Open Selected",
+            self._accept,
+            primary=True,
+            width=120,
+            height=30,
+            bg=COLOR_BG_WHITE,
+        ).pack(side=RIGHT, padx=(0, 8))
+
+    def _select_all(self):
+        for var in self.vars:
+            var.set(True)
+
+    def _clear_all(self):
+        for var in self.vars:
+            var.set(False)
+
+    def _cancel(self):
+        self.result = []
+        self.win.destroy()
+
+    def _accept(self):
+        self.result = [link for var, link in zip(self.vars, self.links) if var.get()]
+        self.win.destroy()
+
+    def show(self):
+        self.win.wait_window()
+        return self.result

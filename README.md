@@ -21,6 +21,7 @@ GENImail combines three daily workflows in one app:
 - Python 3.11+
 - Tkinter
 - Microsoft Graph API (`msal`, `requests`)
+- Embedded browser: WebView2 via `tkwebview2`
 - Pillow + pywin32 (scanner paths)
 - PyMuPDF (PDF rendering)
 - SQLite (local cache)
@@ -76,4 +77,5 @@ The following contain local runtime data and are git-ignored:
 ## Notes
 
 - This is a Windows-focused desktop app.
+- Microsoft Edge WebView2 Runtime is required for embedded web surfaces.
 - iOS/iPadOS are not target runtime environments for this codebase.

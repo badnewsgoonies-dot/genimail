@@ -36,13 +36,13 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
     view_toggle.pack(fill=X)
 
     app.view_mode = StringVar(value="Plain")
-    app._html_frame = None
+    app._browser_controller = None
     app._raw_html_content = None
 
     PillToggle(
         view_toggle,
         app.view_mode,
-        ["Plain", "HTML"],
+        ["Plain", "Web"],
         width=140,
         bg=T.BG_MUTED,
     ).pack(side=LEFT)
@@ -50,7 +50,7 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
 
     open_browser_lbl = Label(
         view_toggle,
-        text="Open in Browser",
+        text="Open Web Tab",
         font=T.FONT_SMALL,
         bg=T.BG_MUTED,
         fg=T.ACCENT,
@@ -124,9 +124,36 @@ def build_preview_tabs(app, pdf_viewer_cls, scanner_cls, pdf_initial_dir):
         bg=T.BG_MUTED,
     ).pack(side=RIGHT)
 
+    pdf_toolbar = Frame(app.pdf_tab, bg=T.BG_MUTED, padx=12, pady=6)
+    pdf_toolbar.pack(fill=X)
+    Label(
+        pdf_toolbar,
+        text="PDF Tabs",
+        font=T.FONT_SMALL,
+        bg=T.BG_MUTED,
+        fg=T.TEXT_SECONDARY,
+    ).pack(side=LEFT)
+    WarmButton(
+        pdf_toolbar,
+        "Close Current Tab",
+        app._close_current_pdf_tab,
+        primary=False,
+        width=130,
+        height=30,
+        bg=T.BG_MUTED,
+    ).pack(side=RIGHT)
+
+    app.pdf_tabs_notebook = ttk.Notebook(app.pdf_tab)
+    app.pdf_tabs_notebook.pack(fill=BOTH, expand=True)
+    app._pdf_viewer_cls = pdf_viewer_cls
+    app._pdf_extra_tabs = {}
+
+    app._pdf_main_tab = Frame(app.pdf_tabs_notebook, bg=T.BG_SURFACE)
+    app.pdf_tabs_notebook.add(app._pdf_main_tab, text="Current PDF")
+
     os.makedirs(pdf_initial_dir, exist_ok=True)
     app.pdf_viewer = pdf_viewer_cls(
-        app.pdf_tab,
+        app._pdf_main_tab,
         config_get=app.config.get,
         config_set=app.config.set,
         initial_dir=pdf_initial_dir,

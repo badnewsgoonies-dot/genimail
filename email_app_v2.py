@@ -6,9 +6,8 @@ Uses MSAL + Microsoft Graph API for authentication and email operations.
 
 import os
 import threading
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
-import webbrowser
-import html
 import base64
 from datetime import datetime
 from tkinter import (
@@ -32,6 +31,14 @@ from genimail.constants import (
     FOLDER_DISPLAY,
     POLL_INTERVAL_MS,
 )
+from genimail.browser import (
+    BrowserController,
+    BrowserDownloadError,
+    BrowserFeatureUnavailableError,
+    download_url_content,
+    require_pdf_bytes,
+)
+from genimail.browser.navigation import wrap_plain_text_as_html
 from genimail.domain.helpers import (
     domain_to_company,
     format_date,
@@ -39,6 +46,7 @@ from genimail.domain.helpers import (
     strip_html,
     token_cache_path_for_client_id,
 )
+from genimail.domain.link_tools import collect_cloud_pdf_links
 from genimail.domain.quotes import (
     build_quote_context,
     create_quote_doc,
@@ -813,7 +821,7 @@ class CompanyManagerDialog:
                            parent=self.win)
 
 
-from genimail.ui.dialogs import AttachmentBrowser, CompanyManagerDialog, ComposeWindow
+from genimail.ui.dialogs import AttachmentBrowser, CloudPdfLinkDialog, CompanyManagerDialog, ComposeWindow
 
 
 class EmailApp:
@@ -824,6 +832,10 @@ class EmailApp:
         self.root.title(APP_NAME)
         self.config = Config()
         self._config_load_error = self.config.load_error
+        self.browser_engine = (self.config.get("browser_engine", "webview2") or "webview2").strip().lower()
+        if self.browser_engine != "webview2":
+            self.browser_engine = "webview2"
+            self.config.set("browser_engine", "webview2")
         self.root.geometry(self.config.get("window_geometry", "1100x700"))
         self.root.minsize(900, 550)
 
@@ -854,6 +866,7 @@ class EmailApp:
         # Performance: caches
         self.message_cache = {}      # msg_id -> full message body + metadata
         self.attachment_cache = {}   # msg_id -> list of attachments
+        self.cloud_link_cache = {}   # msg_id -> list of cloud/external PDF links
         self.known_ids = set()       # tracked message IDs for smarter polling
         self._poll_failures = 0      # consecutive poll failure count for backoff
 
@@ -1142,96 +1155,101 @@ class EmailApp:
             pdf_initial_dir=PDF_DIR,
         )
 
-    # -- HTML View Methods --
+    # -- Web View Methods --
 
     def _switch_view_mode_v2(self):
-        """Switch between plain text and HTML view (Paper Studio version)."""
+        """Switch between plain text and embedded WebView2 view."""
         mode = (self.view_mode.get() or "").strip().lower()
-        
+
         if mode == "plain":
-            if self._html_frame is not None:
-                self._html_frame.pack_forget()
+            if self._browser_controller is not None:
+                self._browser_controller.hide_main()
             self.preview_scrollbar.pack(side=RIGHT, fill=Y)
             self.preview_body.pack(fill=BOTH, expand=True)
-        else:  # HTML
-            if not self._ensure_html_frame():
-                self.view_mode.set("Plain")
-                return
-            self.preview_body.pack_forget()
-            self.preview_scrollbar.pack_forget()
-            self._html_frame.pack(fill=BOTH, expand=True)
-            self._render_html_preview()
+            return
 
-    def _ensure_html_frame(self):
-        """Create HTML frame on first use (lazy loading)."""
-        if self._html_frame is not None:
+        if mode == "html":
+            self.view_mode.set("Web")
+            mode = "web"
+
+        if mode != "web":
+            self.view_mode.set("Plain")
+            return
+
+        if not self._ensure_browser_controller():
+            self.view_mode.set("Plain")
+            return
+
+        self.preview_body.pack_forget()
+        self.preview_scrollbar.pack_forget()
+        self._browser_controller.show_main()
+        self._render_html_preview()
+
+    def _ensure_browser_controller(self):
+        """Create embedded WebView2 host on first use."""
+        if self._browser_controller is not None:
             return True
+
         try:
-            from tkinterweb import HtmlFrame
-            self._html_frame = HtmlFrame(self.body_container, messages_enabled=False,
-                                          vertical_scrollbar=True)
-            # Don't pack yet - only pack when HTML view selected
+            self._browser_controller = BrowserController(self.root, bg_color=T.BG_SURFACE)
+            self._browser_controller.start(self.body_container)
             return True
-        except ImportError:
-            messagebox.showinfo("Missing Package",
-                "HTML view requires tkinterweb.\n\n"
-                "Install with:\n  pip install tkinterweb\n\n"
-                "Using plain text view instead.",
-                parent=self.root)
+        except BrowserFeatureUnavailableError as exc:
+            messagebox.showerror(
+                "WebView2 Unavailable",
+                f"{exc}\n\nInstall dependencies:\n  pip install tkwebview2",
+                parent=self.root,
+            )
+            self.status_var.set("Web view unavailable")
             return False
         except Exception as e:
-            print(f"[HTML] Error creating HtmlFrame: {e}")
+            print(f"[WEBVIEW] Error creating browser host: {e}")
+            messagebox.showerror("WebView2 Error", str(e), parent=self.root)
             return False
 
     def _switch_view_mode(self):
-        """Switch between plain text and HTML view."""
+        """Compatibility wrapper for legacy callback names."""
         self._switch_view_mode_v2()
 
     def _render_html_preview(self):
-        """Render HTML content in the HTML frame."""
-        if self._html_frame is None or not self.current_message:
+        """Render message content in embedded WebView2."""
+        if self._browser_controller is None or not self.current_message:
             return
-        
-        # Use stored raw HTML content
+
         if self._raw_html_content:
             try:
-                self._html_frame.load_html(self._raw_html_content)
+                self._browser_controller.load_html(self._raw_html_content)
             except Exception as e:
-                print(f"[HTML] Render error: {e}")
-                # Fall back to plain text
+                print(f"[WEBVIEW] Render error: {e}")
                 self.view_mode.set("Plain")
                 self._switch_view_mode_v2()
         else:
-            # No HTML content, show plain text wrapped in HTML
             body_preview = self.current_message.get("bodyPreview", "")
-            wrapped = f"<html><body><pre style='font-family: Segoe UI; white-space: pre-wrap;'>{html.escape(body_preview)}</pre></body></html>"
             try:
-                self._html_frame.load_html(wrapped)
+                self._browser_controller.load_html(wrap_plain_text_as_html(body_preview))
             except Exception:
                 pass
 
     def _open_in_browser(self):
-        """Open current email in system browser."""
+        """Open current email in a dedicated in-app web tab."""
         if not self.current_message:
             messagebox.showinfo("No Email", "Select an email first.", parent=self.root)
             return
-        
+
+        if not self._ensure_browser_controller():
+            return
+
         content = self._raw_html_content
         if not content:
-            # Use plain text wrapped in HTML
             body_preview = self.current_message.get("bodyPreview", "")
-            content = f"<html><body><pre>{html.escape(body_preview)}</pre></body></html>"
-        
-        # Save to temp file and open
-        import tempfile
+            content = wrap_plain_text_as_html(body_preview)
+
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.html', 
-                                              delete=False, encoding='utf-8') as f:
-                f.write(content)
-                temp_path = f.name
-            webbrowser.open(f'file:///{temp_path}')
+            tab = self._browser_controller.open_new_tab("Email Web View")
+            self._browser_controller.load_html(content, tab_id=tab.tab_id)
+            self.status_var.set("Opened web tab")
         except Exception as e:
-            messagebox.showerror("Error", f"Could not open in browser:\n{e}", parent=self.root)
+            messagebox.showerror("Error", f"Could not open in web tab:\n{e}", parent=self.root)
 
     def _on_list_scroll(self, event):
         """Handle mouse wheel scrolling with virtual scroll."""
@@ -1790,11 +1808,11 @@ class EmailApp:
         self.preview_body.insert("1.0", preview_text)
         self.preview_body.config(state=DISABLED)
 
-        # If in HTML mode, show loading message
-        if (self.view_mode.get() or "").strip().lower() == "html" and self._html_frame is not None:
+        # If in Web mode, show loading message
+        if (self.view_mode.get() or "").strip().lower() == "web" and self._browser_controller is not None:
             try:
                 loading_html = f"<html><body><p style='color: #888; font-family: Segoe UI;'>Loading email content...</p></body></html>"
-                self._html_frame.load_html(loading_html)
+                self._browser_controller.load_html(loading_html)
             except Exception:
                 pass
 
@@ -1861,7 +1879,7 @@ class EmailApp:
         raw_content = body.get("content", "")
         content_type = body.get("contentType", "")
         
-        # Store raw HTML for HTML view
+        # Store raw HTML for Web view
         if content_type.lower() == "html":
             self._raw_html_content = raw_content
             plain_content = strip_html(raw_content)
@@ -1879,8 +1897,8 @@ class EmailApp:
         # Update the appropriate view based on current mode
         self.current_message = msg
         
-        if (self.view_mode.get() or "").strip().lower() == "html" and self._html_frame is not None:
-            # Update HTML view
+        if (self.view_mode.get() or "").strip().lower() == "web" and self._browser_controller is not None:
+            # Update web view
             self._render_html_preview()
         
         # Always update plain text view (it's the fallback)
@@ -1894,36 +1912,53 @@ class EmailApp:
             w.destroy()
 
         msg_id = msg["id"]
+        cloud_links = collect_cloud_pdf_links(
+            raw_content if content_type.lower() == "html" else "",
+            plain_content,
+        )
+        self.cloud_link_cache[msg_id] = cloud_links
 
-        if msg.get("hasAttachments"):
+        has_file_attachments = bool(msg.get("hasAttachments"))
+        has_cloud_links = bool(cloud_links)
+
+        if has_file_attachments or has_cloud_links:
             self.att_frame.pack(fill=X, before=self.email_action_frame)
-            Label(self.att_frame, text="ATTACHMENTS", font=("Segoe UI", 8, "bold"),
-                  bg=COLOR_BG_LIGHT, fg=COLOR_BORDER).pack(anchor=W, pady=(0, 4))
+            if has_file_attachments:
+                Label(
+                    self.att_frame,
+                    text="ATTACHMENTS",
+                    font=("Segoe UI", 8, "bold"),
+                    bg=COLOR_BG_LIGHT,
+                    fg=COLOR_BORDER,
+                ).pack(anchor=W, pady=(0, 4))
 
-            # Check attachment cache first (memory then SQLite)
-            if msg_id in self.attachment_cache:
-                self._render_attachments(self.attachment_cache[msg_id], msg_id)
-            else:
-                # Try SQLite cache
-                cached_atts = self.cache.get_attachments(msg_id)
-                if cached_atts:
-                    self.attachment_cache[msg_id] = cached_atts
-                    self._render_attachments(cached_atts, msg_id)
+                # Check attachment cache first (memory then SQLite)
+                if msg_id in self.attachment_cache:
+                    self._render_attachments(self.attachment_cache[msg_id], msg_id)
                 else:
-                    def load_atts():
-                        try:
-                            atts = self.graph.get_attachments(msg_id)
-                            self.attachment_cache[msg_id] = atts
-                            # Save to SQLite cache
+                    # Try SQLite cache
+                    cached_atts = self.cache.get_attachments(msg_id)
+                    if cached_atts:
+                        self.attachment_cache[msg_id] = cached_atts
+                        self._render_attachments(cached_atts, msg_id)
+                    else:
+                        def load_atts():
                             try:
-                                self.cache.save_attachments(msg_id, atts)
+                                atts = self.graph.get_attachments(msg_id)
+                                self.attachment_cache[msg_id] = atts
+                                # Save to SQLite cache
+                                try:
+                                    self.cache.save_attachments(msg_id, atts)
+                                except Exception:
+                                    pass
+                                self.root.after(0, lambda: self._render_attachments(atts, msg_id))
                             except Exception:
                                 pass
-                            self.root.after(0, lambda: self._render_attachments(atts, msg_id))
-                        except Exception:
-                            pass
 
-                    threading.Thread(target=load_atts, daemon=True).start()
+                        threading.Thread(target=load_atts, daemon=True).start()
+
+            if has_cloud_links:
+                self._render_cloud_pdf_links(msg_id, cloud_links)
         else:
             self.att_frame.pack_forget()
 
@@ -1952,6 +1987,140 @@ class EmailApp:
                    command=lambda a=att, mid=msg_id: self._save_attachment(a, mid)
                    ).pack(side=RIGHT)
 
+    def _render_cloud_pdf_links(self, msg_id, links):
+        if self.att_frame.winfo_children():
+            Frame(self.att_frame, bg=COLOR_BORDER, height=1).pack(fill=X, pady=(6, 6))
+
+        Label(
+            self.att_frame,
+            text="LINKED CLOUD FILES",
+            font=("Segoe UI", 8, "bold"),
+            bg=COLOR_BG_LIGHT,
+            fg=COLOR_BORDER,
+        ).pack(anchor=W, pady=(0, 4))
+
+        summary = f"{len(links)} link(s) found in this email body."
+        if links:
+            sources = sorted({link.get("source", "External") for link in links})
+            summary += " Sources: " + ", ".join(sources[:3]) + ("..." if len(sources) > 3 else "")
+
+        row = Frame(self.att_frame, bg=COLOR_BG_LIGHT)
+        row.pack(fill=X, pady=(0, 2))
+        Label(row, text=summary, font=FONT_SMALL, bg=COLOR_BG_LIGHT, fg=COLOR_READ).pack(side=LEFT)
+        Button(
+            row,
+            text="Select & Open PDFs",
+            font=FONT_SMALL,
+            relief=FLAT,
+            bg=COLOR_ACCENT,
+            fg="white",
+            command=lambda mid=msg_id: self._open_cloud_pdf_links(mid),
+        ).pack(side=RIGHT)
+
+    def _open_cloud_pdf_links(self, msg_id):
+        links = self.cloud_link_cache.get(msg_id) or []
+        if not links:
+            messagebox.showinfo("No Links", "No supported cloud links found in this email.", parent=self.root)
+            return
+
+        picker = CloudPdfLinkDialog(self.root, links)
+        selected_links = picker.show()
+        if not selected_links:
+            return
+
+        self.status_var.set(f"Downloading {len(selected_links)} linked PDF(s)...")
+
+        def do_fetch():
+            opened = 0
+            failures = []
+            for index, link in enumerate(selected_links, start=1):
+                try:
+                    content = self._download_linked_pdf_bytes(link["download_url"])
+                    name = link.get("suggested_name") or f"linked_{index}.pdf"
+                    digest = hashlib.sha1(link["download_url"].encode("utf-8")).hexdigest()[:12]
+                    doc_key = f"link:{msg_id}:{digest}"
+                    self.root.after(
+                        0,
+                        lambda dk=doc_key, nm=name, blob=content: self._open_pdf_in_tab(
+                            doc_key=dk,
+                            name=nm,
+                            content=blob,
+                            new_tab=True,
+                        ),
+                    )
+                    opened += 1
+                except Exception as exc:
+                    failures.append(f"{link.get('source', 'External')}: {exc}")
+
+            def show_result():
+                if opened:
+                    self.status_var.set(f"Opened {opened} linked PDF(s)")
+                else:
+                    self.status_var.set("No linked PDFs opened")
+                if failures:
+                    messagebox.showwarning(
+                        "Some Links Failed",
+                        "Could not open all selected links:\n\n" + "\n".join(failures[:6]),
+                        parent=self.root,
+                    )
+
+            self.root.after(0, show_result)
+
+        threading.Thread(target=do_fetch, daemon=True).start()
+
+    def _download_linked_pdf_bytes(self, url):
+        result = download_url_content(url)
+        if not result.content:
+            raise BrowserDownloadError("Downloaded file is empty.")
+        return require_pdf_bytes(result)
+
+    def _open_pdf_in_tab(self, doc_key, name, content, new_tab=False):
+        if not new_tab or not hasattr(self, "pdf_tabs_notebook"):
+            self.pdf_viewer.load_pdf_bytes(doc_key, name, content)
+            self.preview_notebook.select(self.pdf_tab)
+            if hasattr(self, "pdf_tabs_notebook") and hasattr(self, "_pdf_main_tab"):
+                self.pdf_tabs_notebook.select(self._pdf_main_tab)
+            return
+
+        existing = self._pdf_extra_tabs.get(doc_key)
+        if existing is None:
+            tab_frame = Frame(self.pdf_tabs_notebook, bg=T.BG_SURFACE)
+            viewer = self._pdf_viewer_cls(
+                tab_frame,
+                config_get=self.config.get,
+                config_set=self.config.set,
+                initial_dir=PDF_DIR,
+                bg=T.BG_SURFACE,
+                accent=T.ACCENT,
+            )
+            viewer.pack(fill=BOTH, expand=True)
+            tab_label = name if len(name) <= 24 else name[:21] + "..."
+            self.pdf_tabs_notebook.add(tab_frame, text=tab_label)
+            existing = {"frame": tab_frame, "viewer": viewer}
+            self._pdf_extra_tabs[doc_key] = existing
+
+        existing["viewer"].load_pdf_bytes(doc_key, name, content)
+        self.preview_notebook.select(self.pdf_tab)
+        self.pdf_tabs_notebook.select(existing["frame"])
+
+    def _close_current_pdf_tab(self):
+        if not hasattr(self, "pdf_tabs_notebook"):
+            return
+        current_tab = self.pdf_tabs_notebook.select()
+        if not current_tab:
+            return
+        if hasattr(self, "_pdf_main_tab") and str(current_tab) == str(self._pdf_main_tab):
+            return
+
+        for key, info in list(self._pdf_extra_tabs.items()):
+            if str(info["frame"]) == str(current_tab):
+                del self._pdf_extra_tabs[key]
+                break
+
+        self.pdf_tabs_notebook.forget(current_tab)
+        if hasattr(self, "_pdf_main_tab"):
+            self.pdf_tabs_notebook.select(self._pdf_main_tab)
+
     def _view_pdf_attachment(self, att, msg_id):
         """Download a PDF attachment and open it in the embedded PDF tab (no disk write)."""
         name = att.get("name", "attachment.pdf")
@@ -1968,8 +2137,7 @@ class EmailApp:
 
                 def on_ui():
                     try:
-                        self.pdf_viewer.load_pdf_bytes(doc_key, name, content)
-                        self.preview_notebook.select(self.pdf_tab)
+                        self._open_pdf_in_tab(doc_key=doc_key, name=name, content=content, new_tab=False)
                         self.status_var.set(f"PDF opened: {name}")
                     except Exception as e:
                         messagebox.showerror("PDF Error", str(e), parent=self.root)
@@ -2167,6 +2335,7 @@ class EmailApp:
         for mid in deleted_ids:
             self.message_cache.pop(mid, None)
             self.attachment_cache.pop(mid, None)
+            self.cloud_link_cache.pop(mid, None)
         # Refresh display if needed
         if self.current_folder == "inbox":
             self._render_email_list()
@@ -2219,6 +2388,8 @@ class EmailApp:
         self.config.set("window_geometry", self.root.geometry())
         if self._poll_id:
             self.root.after_cancel(self._poll_id)
+        if self._browser_controller is not None:
+            self._browser_controller.dispose()
         self.root.destroy()
 
 

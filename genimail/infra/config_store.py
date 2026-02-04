@@ -13,6 +13,7 @@ class Config:
             "companies": {},
             "company_colors": {},
             "client_id": "",
+            "browser_engine": "webview2",
             "pdf_calibration": {},
             "window_geometry": "1100x700",
             "quote_template_path": DEFAULT_QUOTE_TEMPLATE_FILE,
