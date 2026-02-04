@@ -14,7 +14,9 @@ class EmailCache:
     def __init__(self, db_path=None):
         self.db_path = db_path or CACHE_DB_FILE
         self._local = threading.local()
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:  # Skip for :memory: or relative paths without directory
+            os.makedirs(db_dir, exist_ok=True)
         self._init_schema()
 
     @property

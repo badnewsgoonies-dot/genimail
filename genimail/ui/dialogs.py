@@ -542,7 +542,7 @@ class ComposeWindow:
                 )
                 self.win.after(0, self._on_send_success)
             except Exception as e:
-                self.win.after(0, lambda: self._on_send_fail(str(e)))
+                self.win.after(0, lambda err=e: self._on_send_fail(str(err)))
 
         threading.Thread(target=do_send, daemon=True).start()
 
@@ -693,7 +693,7 @@ class AttachmentBrowser:
                     lambda: messagebox.showinfo("Saved", f"Attachment saved to:\n{save_path}", parent=self.win),
                 )
             except Exception as e:
-                self.win.after(0, lambda: messagebox.showerror("Download Error", str(e), parent=self.win))
+                self.win.after(0, lambda err=e: messagebox.showerror("Download Error", str(err), parent=self.win))
 
         threading.Thread(target=do_download, daemon=True).start()
 

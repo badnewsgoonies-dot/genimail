@@ -763,7 +763,7 @@ class EmailApp:
 
                 self.root.after(0, self._on_messages_loaded)
             except Exception as e:
-                self.root.after(0, lambda: self.status_var.set(f"Error: {e}"))
+                self.root.after(0, lambda err=e: self.status_var.set(f"Error: {err}"))
             finally:
                 self._loading = False
 
@@ -1133,7 +1133,7 @@ class EmailApp:
                 self.root.after(0, lambda: self._show_preview_if_current(full_msg, msg_id))
                 self._prefetch_adjacent_bg(msg)
             except Exception as e:
-                self.root.after(0, lambda: self.status_var.set(f"Error loading message: {e}"))
+                self.root.after(0, lambda err=e: self.status_var.set(f"Error loading message: {err}"))
 
         threading.Thread(target=load_full, daemon=True).start()
 
@@ -1484,7 +1484,7 @@ class EmailApp:
 
                 self.root.after(0, on_ui)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("PDF Error", str(e), parent=self.root))
+                self.root.after(0, lambda err=e: messagebox.showerror("PDF Error", str(err), parent=self.root))
 
         threading.Thread(target=do_open, daemon=True).start()
 
@@ -1503,7 +1503,7 @@ class EmailApp:
                     f.write(content)
                 self.root.after(0, lambda: self.status_var.set(f"Saved: {os.path.basename(save_path)}"))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Save Error", str(e)))
+                self.root.after(0, lambda err=e: messagebox.showerror("Save Error", str(err)))
 
         threading.Thread(target=do_save, daemon=True).start()
 
