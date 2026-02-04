@@ -18,6 +18,10 @@ class Config:
             "window_geometry": "1100x700",
             "quote_template_path": DEFAULT_QUOTE_TEMPLATE_FILE,
             "quote_output_dir": QUOTE_DIR,
+            "cloud_pdf_cache_ttl_hours": 168,
+            "cloud_pdf_cache_max_mb": 2048,
+            "takeoff_default_wall_height": "8ft",
+            "door_finder_enabled": True,
         }
         self.load()
 

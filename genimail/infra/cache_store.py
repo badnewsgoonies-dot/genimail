@@ -74,11 +74,26 @@ class EmailCache:
                 last_sync INTEGER
             );
 
+            CREATE TABLE IF NOT EXISTS cloud_pdf_cache (
+                url_key TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                file_name TEXT,
+                size_bytes INTEGER DEFAULT 0,
+                content_type TEXT,
+                source TEXT,
+                content_hash TEXT,
+                fetched_at INTEGER NOT NULL,
+                last_accessed_at INTEGER NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id, received_datetime DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_cached ON messages(cached_at);
             CREATE INDEX IF NOT EXISTS idx_messages_company ON messages(company_label);
             CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_address);
             CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
+            CREATE INDEX IF NOT EXISTS idx_cloud_cache_access ON cloud_pdf_cache(last_accessed_at);
+            CREATE INDEX IF NOT EXISTS idx_cloud_cache_fetched ON cloud_pdf_cache(fetched_at);
         """
         )
         conn.commit()
@@ -237,6 +252,7 @@ class EmailCache:
         conn.execute("DELETE FROM message_bodies")
         conn.execute("DELETE FROM attachments")
         conn.execute("DELETE FROM sync_state")
+        conn.execute("DELETE FROM cloud_pdf_cache")
         conn.commit()
 
     def search_by_domain(self, domain):
@@ -326,3 +342,66 @@ class EmailCache:
         )
         self.conn.commit()
 
+    def get_cloud_pdf_entry(self, url_key):
+        cur = self.conn.execute(
+            """SELECT url_key, url, local_path, file_name, size_bytes, content_type,
+                      source, content_hash, fetched_at, last_accessed_at
+               FROM cloud_pdf_cache
+               WHERE url_key = ?""",
+            (url_key,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def upsert_cloud_pdf_entry(
+        self,
+        url_key,
+        *,
+        url,
+        local_path,
+        file_name,
+        size_bytes,
+        content_type,
+        source,
+        content_hash,
+        fetched_at,
+        last_accessed_at,
+    ):
+        self.conn.execute(
+            """INSERT OR REPLACE INTO cloud_pdf_cache
+               (url_key, url, local_path, file_name, size_bytes, content_type,
+                source, content_hash, fetched_at, last_accessed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                url_key,
+                url,
+                local_path,
+                file_name,
+                int(size_bytes or 0),
+                content_type,
+                source,
+                content_hash,
+                int(fetched_at),
+                int(last_accessed_at),
+            ),
+        )
+        self.conn.commit()
+
+    def touch_cloud_pdf_entry(self, url_key, last_accessed_at=None):
+        self.conn.execute(
+            "UPDATE cloud_pdf_cache SET last_accessed_at = ? WHERE url_key = ?",
+            (int(last_accessed_at or time.time()), url_key),
+        )
+        self.conn.commit()
+
+    def delete_cloud_pdf_entry(self, url_key):
+        self.conn.execute("DELETE FROM cloud_pdf_cache WHERE url_key = ?", (url_key,))
+        self.conn.commit()
+
+    def list_cloud_pdf_entries(self):
+        cur = self.conn.execute(
+            """SELECT url_key, url, local_path, file_name, size_bytes, content_type,
+                      source, content_hash, fetched_at, last_accessed_at
+               FROM cloud_pdf_cache"""
+        )
+        return [dict(row) for row in cur.fetchall()]

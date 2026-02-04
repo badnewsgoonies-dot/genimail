@@ -6,6 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PY_FILES = [
     "email_app_v2.py",
+    "email_app_qt.py",
+    "pdf_takeoff_tool.py",
     "pdf_viewer.py",
     "scanner_app_v4.py",
     "genimail/paths.py",
@@ -29,6 +31,13 @@ PY_FILES = [
     "genimail/infra/graph_client.py",
     "genimail/infra/config_store.py",
     "genimail/services/mail_sync.py",
+    "genimail_qt/__init__.py",
+    "genimail_qt/theme.py",
+    "genimail_qt/workers.py",
+    "genimail_qt/cloud_pdf_cache.py",
+    "genimail_qt/dialogs.py",
+    "genimail_qt/takeoff_engine.py",
+    "genimail_qt/window.py",
 ]
 
 
