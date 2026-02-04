@@ -1,0 +1,2 @@
+"""Genimail modular package."""
+

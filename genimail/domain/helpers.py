@@ -1,0 +1,96 @@
+import hashlib
+import html
+import os
+import re
+from datetime import datetime
+
+from genimail.constants import DEFAULT_CLIENT_ID
+from genimail.paths import CONFIG_DIR, TOKEN_CACHE_FILE
+
+
+def token_cache_path_for_client_id(client_id: str) -> str:
+    """Return a stable token cache path per client id."""
+    cid = (client_id or DEFAULT_CLIENT_ID).strip()
+    if cid == DEFAULT_CLIENT_ID:
+        return TOKEN_CACHE_FILE
+    digest = hashlib.sha1(cid.encode("utf-8")).hexdigest()[:12]
+    return os.path.join(CONFIG_DIR, f"token_cache_{digest}.json")
+
+
+def strip_html(text):
+    """Strip HTML tags, CSS, scripts and decode entities to plain text."""
+    if not text:
+        return ""
+    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<head[^>]*>.*?</head>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    text = re.sub(r"<!\[CDATA\[.*?\]\]>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<img[^>]*alt=[\"']([^\"']*)[\"'][^>]*>", r"[Image: \1]", text, flags=re.IGNORECASE)
+    text = re.sub(r"<img[^>]*>", "[Image]", text, flags=re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<p[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<div[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</div>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<tr[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<td[^>]*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<th[^>]*>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<a[^>]*href=[\"']([^\"']*)[\"'][^>]*>([^<]*)</a>", r"\2 [\1]", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    invisible_chars = "\u200b\u200c\u200d\ufeff\u00ad\u034f\u2060\u2061\u2062\u2063\u2064\u115f\u1160\u17b4\u17b5\u180e\u2800"
+    for char in invisible_chars:
+        text = text.replace(char, "")
+    lines = text.split("\n")
+    cleaned = []
+    prev_blank = False
+    for line in lines:
+        stripped = " ".join(line.split())
+        if not stripped:
+            if not prev_blank:
+                cleaned.append("")
+                prev_blank = True
+        else:
+            cleaned.append(stripped)
+            prev_blank = False
+    return "\n".join(cleaned).strip()
+
+
+def domain_to_company(domain):
+    """Convert email domain to a readable company name."""
+    if not domain:
+        return "Other"
+    parts = domain.lower().split(".")
+    name = parts[-2] if len(parts) >= 2 else parts[0]
+    skip = {"gmail", "yahoo", "hotmail", "outlook", "live", "msn", "aol", "icloud", "mail", "protonmail"}
+    if name in skip:
+        return domain.lower()
+    return name.replace("-", " ").replace("_", " ").title()
+
+
+def format_date(iso_str):
+    """Format ISO date string for display."""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+        if dt.date() == now.date():
+            return dt.strftime("%I:%M %p").lstrip("0")
+        if dt.year == now.year:
+            return dt.strftime("%b %d")
+        return dt.strftime("%b %d, %Y")
+    except Exception:
+        return iso_str[:10] if iso_str else ""
+
+
+def format_size(size_bytes):
+    """Format file size for display."""
+    if not size_bytes:
+        return ""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+

@@ -1,0 +1,16 @@
+# Python caches/env
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+
+# Local runtime/sensitive data
+email_config/
+scans/
+pdf/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+nul
+.claude/
