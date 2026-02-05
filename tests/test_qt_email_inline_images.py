@@ -20,6 +20,7 @@ class _FakeWindow:
 def test_normalize_cid_value_handles_prefix_and_angle_brackets():
     assert window_module._normalize_cid_value("cid:<Banner-123>") == "banner-123"
     assert window_module._normalize_cid_value("<b@c>") == "b@c"
+    assert window_module._normalize_cid_value("image001.png%4001D123ABC") == "image001.png@01d123abc"
     assert window_module._normalize_cid_value("") == ""
 
 
@@ -36,6 +37,15 @@ def test_replace_cid_sources_with_data_urls_swaps_known_ids():
     assert "cid:logo-2" not in replaced
     assert "data:image/png;base64,AAA" in replaced
     assert "data:image/jpeg;base64,BBB" in replaced
+
+
+def test_replace_cid_sources_with_data_urls_handles_encoded_outlook_cid():
+    html = '<img src="cid:image001.png%4001D123ABC">'
+    replaced = window_module._replace_cid_sources_with_data_urls(
+        html,
+        {"image001.png@01d123abc": "data:image/png;base64,CCC"},
+    )
+    assert 'src="data:image/png;base64,CCC"' in replaced
 
 
 def test_build_inline_cid_data_urls_filters_valid_inline_entries():
@@ -76,3 +86,23 @@ def test_hydrate_inline_attachment_bytes_downloads_missing_inline_payload():
     assert graph.calls == [("msg-1", "att-1")]
     assert hydrated[0]["contentBytes"] == "AAA"
     assert hydrated[0]["contentType"] == "image/png"
+
+
+def test_hydrate_inline_attachment_bytes_skips_download_when_present():
+    graph = _FakeGraph({"contentBytes": "NEVER_USED"})
+    fake = _FakeWindow(graph)
+    attachments = [
+        {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "id": "att-2",
+            "isInline": True,
+            "contentId": "<logo>",
+            "contentBytes": "INLINE_DATA",
+            "contentType": "image/jpeg",
+        }
+    ]
+
+    hydrated = GeniMailQtWindow._hydrate_inline_attachment_bytes(fake, "msg-2", attachments)
+
+    assert graph.calls == []
+    assert hydrated[0]["contentBytes"] == "INLINE_DATA"

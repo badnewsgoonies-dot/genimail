@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 from functools import partial
+from urllib.parse import unquote
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
@@ -125,6 +126,7 @@ def _normalize_cid_value(value):
     cid = (value or "").strip()
     if not cid:
         return ""
+    cid = unquote(cid).strip()
     if cid.lower().startswith("cid:"):
         cid = cid[4:]
     cid = cid.strip("<> ").lower()
