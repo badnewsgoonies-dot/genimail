@@ -9,7 +9,7 @@ from urllib.parse import unquote
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
@@ -143,6 +143,10 @@ def _replace_cid_sources_with_data_urls(html_content, cid_data_urls):
         return cid_data_urls.get(normalized, match.group(0))
 
     return _CID_SRC_PATTERN.sub(_replace, html_content)
+
+
+def _is_inline_attachment(attachment):
+    return bool(attachment.get("isInline"))
 
 
 class FilteredWebEnginePage(QWebEnginePage):
@@ -296,9 +300,12 @@ class GeniMailQtWindow(QMainWindow):
         self.message_cache = {}
         self.attachment_cache = {}
         self.cloud_link_cache = {}
+        self.cloud_pdf_downloads = {}
         self.known_ids = set()
         self.company_filter_domain = None
         self.company_domain_labels = {}
+        self._web_page_sources = {}
+        self._download_profile_ids = set()
         self._poll_in_flight = False
         self._poll_lock = threading.Lock()
         self.thread_pool = QThreadPool(self)
@@ -473,14 +480,24 @@ class GeniMailQtWindow(QMainWindow):
         attach_layout.addWidget(self.attachment_list, 1)
         self.cloud_links_info = QLabel("No linked cloud files found")
         attach_layout.addWidget(self.cloud_links_info)
+        self.cloud_download_label = QLabel("Downloaded PDFs")
+        self.cloud_download_label.setObjectName("companyFilterBadge")
+        attach_layout.addWidget(self.cloud_download_label)
+        self.cloud_download_list = QListWidget()
+        attach_layout.addWidget(self.cloud_download_list, 1)
+        self.cloud_download_label.hide()
+        self.cloud_download_list.hide()
         attach_buttons = QHBoxLayout()
         self.open_attachment_btn = QPushButton("Open Selected")
         self.save_attachment_btn = QPushButton("Save Selected As...")
         self.open_cloud_links_btn = QPushButton("Open Linked PDFs")
+        self.open_cloud_download_btn = QPushButton("Open Downloaded")
         self.open_cloud_links_btn.setEnabled(False)
+        self.open_cloud_download_btn.setEnabled(False)
         attach_buttons.addWidget(self.open_attachment_btn)
         attach_buttons.addWidget(self.save_attachment_btn)
         attach_buttons.addWidget(self.open_cloud_links_btn)
+        attach_buttons.addWidget(self.open_cloud_download_btn)
         attach_buttons.addStretch(1)
         attach_layout.addLayout(attach_buttons)
         right_layout.addWidget(attach_box)
@@ -519,6 +536,8 @@ class GeniMailQtWindow(QMainWindow):
         self.open_attachment_btn.clicked.connect(self._open_selected_attachment)
         self.save_attachment_btn.clicked.connect(self._save_selected_attachment)
         self.open_cloud_links_btn.clicked.connect(self._open_cloud_links_for_current)
+        self.open_cloud_download_btn.clicked.connect(self._open_selected_cloud_download)
+        self.cloud_download_list.currentRowChanged.connect(self._update_cloud_download_buttons)
         self.new_mail_btn.clicked.connect(lambda: self._open_compose_dialog("new"))
         self.reply_btn.clicked.connect(lambda: self._open_compose_dialog("reply"))
         self.reply_all_btn.clicked.connect(lambda: self._open_compose_dialog("reply_all"))
@@ -1132,6 +1151,9 @@ class GeniMailQtWindow(QMainWindow):
             self.message_header.setText("No messages")
             self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>No messages in this folder.</body></html>")
             self.attachment_list.clear()
+            self.cloud_download_list.clear()
+            self.cloud_download_label.hide()
+            self._update_cloud_download_buttons()
             self.open_cloud_links_btn.setEnabled(False)
             self.cloud_links_info.setText("No linked cloud files found")
 
@@ -1273,6 +1295,8 @@ class GeniMailQtWindow(QMainWindow):
 
         self.attachment_list.clear()
         for attachment in attachments:
+            if _is_inline_attachment(attachment):
+                continue
             if attachment.get("@odata.type") != "#microsoft.graph.fileAttachment":
                 continue
             name = attachment.get("name") or "attachment"
@@ -1291,12 +1315,62 @@ class GeniMailQtWindow(QMainWindow):
             self.cloud_links_info.setText(f"{len(cloud_links)} linked cloud file(s) detected · {summary}")
         else:
             self.cloud_links_info.setText("No linked cloud files found")
+        detail_id = detail.get("id") or (self.current_message or {}).get("id")
+        self._update_cloud_download_list(detail_id)
 
     def _selected_attachment(self):
         item = self.attachment_list.currentItem()
         if item is None:
             return None
         return item.data(Qt.UserRole)
+
+    def _selected_cloud_download(self):
+        item = self.cloud_download_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def _update_cloud_download_buttons(self, *_):
+        self.open_cloud_download_btn.setEnabled(self.cloud_download_list.currentRow() >= 0)
+
+    def _update_cloud_download_list(self, message_id):
+        self.cloud_download_list.clear()
+        if not message_id:
+            self.cloud_download_label.hide()
+            self.cloud_download_list.hide()
+            self._update_cloud_download_buttons()
+            return
+        downloads = self.cloud_pdf_downloads.get(message_id, [])
+        if not downloads:
+            self.cloud_download_label.hide()
+            self.cloud_download_list.hide()
+            self._update_cloud_download_buttons()
+            return
+        self.cloud_download_label.show()
+        self.cloud_download_list.show()
+        for item in downloads:
+            path = item.get("path")
+            if not path:
+                continue
+            label = os.path.basename(path)
+            if item.get("from_cache"):
+                label = f"{label} · cached"
+            entry = QListWidgetItem(label)
+            entry.setData(Qt.UserRole, path)
+            self.cloud_download_list.addItem(entry)
+        self._update_cloud_download_buttons()
+
+    def _open_selected_cloud_download(self):
+        path = self._selected_cloud_download()
+        if not path:
+            QMessageBox.information(self, "Select Download", "Select a downloaded PDF first.")
+            return
+        if os.path.isfile(path) and path.lower().endswith(".pdf"):
+            self._open_pdf_file(path, activate=True)
+        elif os.path.isfile(path):
+            open_document_file(path)
+        else:
+            QMessageBox.warning(self, "File Missing", f"Could not find downloaded file:\n{path}")
 
     def _download_attachment_bytes(self, message_id, attachment_id):
         attachment = self.graph.download_attachment(message_id, attachment_id)
@@ -1377,11 +1451,11 @@ class GeniMailQtWindow(QMainWindow):
 
         self._set_status(f"Opening {len(selected_links)} linked PDF(s)...")
         self._submit(
-            lambda: self._download_cloud_links(selected_links),
+            lambda: self._download_cloud_links(message_id, selected_links),
             self._on_cloud_links_downloaded,
         )
 
-    def _download_cloud_links(self, selected_links):
+    def _download_cloud_links(self, message_id, selected_links):
         opened_items = []
         failures = []
         for index, link in enumerate(selected_links, start=1):
@@ -1396,9 +1470,10 @@ class GeniMailQtWindow(QMainWindow):
                 opened_items.append({"path": result.path, "from_cache": result.from_cache})
             except (BrowserDownloadError, OSError, ValueError) as exc:
                 failures.append(f"{link.get('source', 'External')}: {exc}")
-        return {"opened_items": opened_items, "failures": failures}
+        return {"message_id": message_id, "opened_items": opened_items, "failures": failures}
 
     def _on_cloud_links_downloaded(self, payload):
+        message_id = payload.get("message_id")
         opened_items = payload.get("opened_items") or []
         failures = payload.get("failures") or []
         cache_hits = 0
@@ -1410,6 +1485,16 @@ class GeniMailQtWindow(QMainWindow):
             if item.get("from_cache"):
                 cache_hits += 1
             self._open_pdf_file(path, activate=(idx == 0))
+
+        if message_id and opened_items:
+            downloads = self.cloud_pdf_downloads.get(message_id, [])
+            existing_paths = {entry.get("path") for entry in downloads if entry.get("path")}
+            for item in opened_items:
+                if item.get("path") and item.get("path") not in existing_paths:
+                    downloads.append(item)
+            self.cloud_pdf_downloads[message_id] = downloads
+            if (self.current_message or {}).get("id") == message_id:
+                self._update_cloud_download_list(message_id)
 
         if opened_items:
             self.workspace_tabs.setCurrentWidget(self.pdf_tab)
@@ -1589,8 +1674,54 @@ class GeniMailQtWindow(QMainWindow):
 
     def _create_web_view(self, surface_name):
         view = QWebEngineView()
-        view.setPage(FilteredWebEnginePage(surface_name, view))
+        page = FilteredWebEnginePage(surface_name, view)
+        view.setPage(page)
+        self._web_page_sources[page] = surface_name
+        self._bind_web_downloads(view)
         return view
+
+    def _bind_web_downloads(self, view):
+        profile = view.page().profile()
+        profile_id = id(profile)
+        if profile_id in self._download_profile_ids:
+            return
+        profile.downloadRequested.connect(self._on_web_download_requested)
+        self._download_profile_ids.add(profile_id)
+
+    def _on_web_download_requested(self, download):
+        page = download.page()
+        source = self._web_page_sources.get(page, "web")
+        message_id = (self.current_message or {}).get("id") if source == "email" else None
+        if message_id:
+            download.setProperty("message_id", message_id)
+        download.setProperty("download_source", source)
+
+        os.makedirs(PDF_DIR, exist_ok=True)
+        suggested_name = download.downloadFileName() or "download.bin"
+        target_path = self._unique_output_path(PDF_DIR, suggested_name)
+        download.setDownloadDirectory(os.path.dirname(target_path))
+        download.setDownloadFileName(os.path.basename(target_path))
+        download.stateChanged.connect(lambda state, dl=download: self._on_web_download_state_changed(dl, state))
+        download.accept()
+        self._set_status(f"Downloading {os.path.basename(target_path)}...")
+
+    def _on_web_download_state_changed(self, download, state):
+        if state != QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+            return
+        directory = download.downloadDirectory() or ""
+        filename = download.downloadFileName() or ""
+        path = os.path.join(directory, filename) if directory and filename else ""
+        message_id = download.property("message_id")
+        if path and message_id:
+            downloads = self.cloud_pdf_downloads.get(message_id, [])
+            existing_paths = {entry.get("path") for entry in downloads if entry.get("path")}
+            if path not in existing_paths:
+                downloads.append({"path": path, "from_cache": False})
+                self.cloud_pdf_downloads[message_id] = downloads
+            if (self.current_message or {}).get("id") == message_id:
+                self._update_cloud_download_list(message_id)
+        if path:
+            self._set_status(f"Downloaded {os.path.basename(path)}")
 
     def _find_pdf_tab_index(self, path):
         normalized = path.lower()

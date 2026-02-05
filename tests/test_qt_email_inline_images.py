@@ -24,6 +24,12 @@ def test_normalize_cid_value_handles_prefix_and_angle_brackets():
     assert window_module._normalize_cid_value("") == ""
 
 
+def test_is_inline_attachment_detects_inline_flag():
+    assert window_module._is_inline_attachment({"isInline": True})
+    assert not window_module._is_inline_attachment({"isInline": False})
+    assert not window_module._is_inline_attachment({})
+
+
 def test_replace_cid_sources_with_data_urls_swaps_known_ids():
     html = '<img src="cid:banner-1"><div style="background:url(cid:logo-2)">x</div>'
     replaced = window_module._replace_cid_sources_with_data_urls(
