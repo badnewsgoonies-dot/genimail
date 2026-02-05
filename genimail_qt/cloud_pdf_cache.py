@@ -28,7 +28,11 @@ def _safe_filename(name: str, fallback: str = "linked.pdf") -> str:
         value = fallback
     if not value.lower().endswith(".pdf"):
         value += ".pdf"
-    return value[:CLOUD_PDF_CACHE_SAFE_FILENAME_MAX_CHARS]
+    if len(value) <= CLOUD_PDF_CACHE_SAFE_FILENAME_MAX_CHARS:
+        return value
+    base, ext = os.path.splitext(value)
+    max_base_len = max(1, CLOUD_PDF_CACHE_SAFE_FILENAME_MAX_CHARS - len(ext))
+    return f"{base[:max_base_len]}{ext}"
 
 
 def url_key(url: str) -> str:

@@ -3,7 +3,7 @@ import time
 
 from genimail.browser.downloads import DownloadResult
 from genimail.infra.cache_store import EmailCache
-from genimail_qt.cloud_pdf_cache import CloudPdfCache
+from genimail_qt.cloud_pdf_cache import CloudPdfCache, _safe_filename
 
 
 def test_cloud_pdf_cache_reuses_fresh_entry(monkeypatch, tmp_path):
@@ -64,3 +64,35 @@ def test_cloud_pdf_cache_prunes_stale_entries(tmp_path):
     result = cloud_cache.prune()
     assert result["deleted"] >= 1
     assert cache.get_cloud_pdf_entry("k1") is None
+
+
+def test_cloud_pdf_cache_ttl_clamps_to_supported_range(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    settings = {"cloud_pdf_cache_ttl_hours": 0}
+    cloud_cache = CloudPdfCache(cache, lambda key, default=None: settings.get(key, default))
+
+    assert cloud_cache._ttl_seconds() == 3600
+
+    settings["cloud_pdf_cache_ttl_hours"] = 24 * 400
+    assert cloud_cache._ttl_seconds() == 24 * 365 * 3600
+
+
+def test_cloud_pdf_cache_max_size_clamps_to_supported_range(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    settings = {"cloud_pdf_cache_max_mb": 1}
+    cloud_cache = CloudPdfCache(cache, lambda key, default=None: settings.get(key, default))
+
+    assert cloud_cache._max_cache_bytes() == 128 * 1024 * 1024
+
+    settings["cloud_pdf_cache_max_mb"] = 99_999
+    assert cloud_cache._max_cache_bytes() == 20_480 * 1024 * 1024
+
+
+def test_safe_filename_normalizes_and_preserves_pdf_extension():
+    long_name = "  weird:name*with?chars  " + ("x" * 200)
+    safe = _safe_filename(long_name)
+
+    assert safe.endswith(".pdf")
+    assert len(safe) <= 120
+    assert ":" not in safe
+    assert "*" not in safe
