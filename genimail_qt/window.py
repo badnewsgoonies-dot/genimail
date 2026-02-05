@@ -1,6 +1,6 @@
 import threading
 
-from PySide6.QtCore import QThreadPool, QTimer, Signal
+from PySide6.QtCore import QEvent, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow
 
 from genimail.constants import POLL_INTERVAL_MS, QT_THREAD_POOL_MAX_WORKERS
@@ -61,6 +61,11 @@ class GeniMailQtWindow(
         self.known_ids = set()
         self.company_filter_domain = None
         self.company_domain_labels = {}
+        self.company_result_messages = []
+        self.company_folder_filter = "all"
+        self.company_folder_sources = []
+        self.company_query_cache = {}
+        self.company_query_inflight = set()
         self._web_page_sources = {}
         self._download_profile_ids = set()
         self._poll_in_flight = False
@@ -76,6 +81,7 @@ class GeniMailQtWindow(
         self._build_ui()
         self._restore_window_geometry()
         self.auth_code_received.connect(self._show_auth_code_dialog)
+        QTimer.singleShot(250, self._auto_connect_on_startup)
 
     def _on_default_worker_error(self, _trace_text):
         self.connect_btn.setEnabled(True)
@@ -94,6 +100,19 @@ class GeniMailQtWindow(
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        if hasattr(self, "_on_host_geometry_changed"):
+            self._on_host_geometry_changed()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() != QEvent.WindowStateChange:
+            return
+
+        if self.isMinimized():
+            if hasattr(self, "_minimize_external_browser"):
+                self._minimize_external_browser()
+            return
+
         if hasattr(self, "_on_host_geometry_changed"):
             self._on_host_geometry_changed()
 

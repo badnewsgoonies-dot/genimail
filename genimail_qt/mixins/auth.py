@@ -9,6 +9,14 @@ from genimail.services.mail_sync import MailSyncService, collect_new_unread
 
 
 class AuthPollMixin:
+    def _auto_connect_on_startup(self):
+        if self.graph is not None:
+            return
+        if not hasattr(self, "connect_btn"):
+            return
+        if self.connect_btn.isEnabled():
+            self._start_authentication()
+
     def _start_authentication(self):
         self.connect_btn.setEnabled(False)
         self._set_status("Authenticating...")
@@ -35,6 +43,11 @@ class AuthPollMixin:
         self.attachment_cache.clear()
         self.cloud_link_cache.clear()
         self.known_ids.clear()
+        self.company_result_messages = []
+        self.company_query_cache.clear()
+        self.company_query_inflight.clear()
+        self.company_folder_filter = "all"
+        self.company_filter_domain = None
         self.current_message = None
         self.message_list.clear()
         self._show_message_list()
@@ -75,7 +88,6 @@ class AuthPollMixin:
         self._set_status(f"Connected as {self.current_user_email}")
         self._populate_folders(result.get("folders") or [])
         self._refresh_company_sidebar()
-        self._load_messages()
         self._start_polling()
 
     def _start_polling(self):
@@ -120,6 +132,41 @@ class AuthPollMixin:
 
         updates = payload.get("messages") or []
         deleted_ids = payload.get("deleted_ids") or []
+
+        if self.company_filter_domain:
+            new_unread = collect_new_unread(updates, self.known_ids)
+            for msg in updates:
+                msg_id = msg.get("id")
+                if msg_id:
+                    self.known_ids.add(msg_id)
+            if deleted_ids:
+                for msg_id in deleted_ids:
+                    self.known_ids.discard(msg_id)
+            if new_unread:
+                self._set_status(f"{len(new_unread)} new unread message(s)")
+            elif updates or deleted_ids:
+                self._set_status("Connected. Sync up to date.")
+            return
+
+        active_folder_key = (self.current_folder_id or "").strip().lower()
+        if hasattr(self, "_folder_key_for_id"):
+            active_folder_key = (self._folder_key_for_id(self.current_folder_id) or active_folder_key).strip().lower()
+
+        if active_folder_key != "inbox":
+            new_unread = collect_new_unread(updates, self.known_ids)
+            for msg in updates:
+                msg_id = msg.get("id")
+                if msg_id:
+                    self.known_ids.add(msg_id)
+            if deleted_ids:
+                for msg_id in deleted_ids:
+                    self.known_ids.discard(msg_id)
+            if new_unread:
+                self._set_status(f"{len(new_unread)} new unread message(s)")
+            elif updates or deleted_ids:
+                self._set_status("Connected. Sync up to date.")
+            return
+
         if deleted_ids:
             deleted_set = set(deleted_ids)
             self.current_messages = [msg for msg in self.current_messages if msg.get("id") not in deleted_set]

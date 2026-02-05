@@ -1,8 +1,15 @@
+import time
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton
 
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
-from genimail.constants import CLOUD_PDF_SOURCE_SUMMARY_MAX, EMAIL_LIST_FETCH_TOP
+from genimail.constants import (
+    CLOUD_PDF_SOURCE_SUMMARY_MAX,
+    EMAIL_COMPANY_CACHE_TTL_SEC,
+    EMAIL_COMPANY_FETCH_PER_FOLDER,
+    EMAIL_LIST_FETCH_TOP,
+)
 from genimail.domain.helpers import format_date, format_size, strip_html
 from genimail.domain.link_tools import collect_cloud_pdf_links
 from genimail_qt.constants import ATTACHMENT_THUMBNAIL_MAX_INITIAL, ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS
@@ -18,17 +25,53 @@ class EmailListMixin:
         if not self.graph:
             QMessageBox.information(self, "Connect First", "Connect to Microsoft before loading messages.")
             return
+
+        if self.company_filter_domain:
+            # In company mode, search narrows the already retrieved cross-folder set.
+            self._apply_company_folder_filter()
+            return
+
         search_text = self.search_input.text().strip() or None
         folder_id = self.current_folder_id
+        self._message_load_token = getattr(self, "_message_load_token", 0) + 1
+        load_token = self._message_load_token
         self._show_message_list()
         self._set_status("Loading messages...")
         self.workers.submit(
-            lambda: self.graph.get_messages(folder_id=folder_id, top=EMAIL_LIST_FETCH_TOP, search=search_text)[0],
+            lambda fid=folder_id, text=search_text, token=load_token: self._messages_worker(fid, text, token),
             self._on_messages_loaded,
         )
 
-    def _on_messages_loaded(self, messages):
-        self.current_messages = messages or []
+    def _messages_worker(self, folder_id, search_text, token):
+        try:
+            messages, _ = self.graph.get_messages(
+                folder_id=folder_id,
+                top=EMAIL_LIST_FETCH_TOP,
+                search=search_text,
+            )
+        except Exception:
+            if not search_text:
+                raise
+            # Graph search can fail for some folders/tenants. Fall back to local filtering.
+            messages, _ = self.graph.get_messages(folder_id=folder_id, top=EMAIL_LIST_FETCH_TOP)
+            search_lower = search_text.strip().lower()
+            messages = [msg for msg in (messages or []) if self._message_matches_search(msg, search_lower)]
+        return {"token": token, "folder_id": folder_id, "messages": messages or []}
+
+    def _on_messages_loaded(self, payload):
+        if isinstance(payload, dict):
+            token = payload.get("token")
+            if token is not None and token != getattr(self, "_message_load_token", token):
+                return
+            folder_id = payload.get("folder_id") or self.current_folder_id
+            messages = payload.get("messages") or []
+        else:
+            folder_id = self.current_folder_id
+            messages = payload or []
+
+        folder_key = self._folder_key_for_id(folder_id)
+        self.company_result_messages = []
+        self.current_messages = [self._with_folder_meta(msg, folder_id, folder_key) for msg in messages]
         self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
         self._refresh_company_sidebar()
         self._render_message_list()
@@ -40,27 +83,194 @@ class EmailListMixin:
             self._show_message_list()
             self._clear_detail_view("No messages in this folder.")
 
-    def _render_message_list(self):
-        filtered = []
-        domain_filter = (self.company_filter_domain or "").lower()
-        for msg in self.current_messages:
-            if domain_filter:
-                sender = msg.get("from", {}).get("emailAddress", {})
-                address = (sender.get("address") or "").lower()
-                if "@" not in address:
-                    continue
-                if address.split("@", 1)[1] != domain_filter:
-                    continue
-            filtered.append(msg)
+    def _load_company_messages_all_folders(self, company_query):
+        if not self.graph:
+            return
+        query_key = (company_query or "").strip().lower()
+        if not query_key:
+            return
 
-        self.filtered_messages = filtered
+        cached = self.company_query_cache.get(query_key)
+        now = time.time()
+        if cached:
+            cached_messages = list(cached.get("messages") or [])
+            self.company_result_messages = cached_messages
+            self.company_folder_filter = self.company_folder_filter or "all"
+            self._apply_company_folder_filter()
+
+            cache_age = now - float(cached.get("fetched_at") or 0)
+            if cache_age <= EMAIL_COMPANY_CACHE_TTL_SEC:
+                self._set_status(
+                    f'Loaded {len(self.filtered_messages)} cached message(s) for "{query_key}".'
+                )
+                return
+            self._set_status(f"Refreshing {query_key} across folders...")
+        else:
+            self._set_status(f"Loading {query_key} across folders...")
+
+        if query_key in self.company_query_inflight:
+            return
+
+        self.company_query_inflight.add(query_key)
+        self._show_message_list()
+        self.current_messages = []
+        self.filtered_messages = []
+        self.message_list.clear()
+        self._clear_detail_view(f'Loading messages for "{query_key}"...')
+        self.workers.submit(
+            lambda q=query_key: self._company_messages_worker(q),
+            self._on_company_messages_loaded,
+            lambda trace_text, q=query_key: self._on_company_messages_error(q, trace_text),
+        )
+
+    def _company_messages_worker(self, company_query):
+        deduped = {}
+        errors = []
+        sources = list(self.company_folder_sources or [])
+        if not sources:
+            sources = [{"id": self.current_folder_id, "key": self._folder_key_for_id(self.current_folder_id), "label": "Current"}]
+
+        search_hint, filter_hint = self._company_query_hints(company_query)
+
+        for source in sources:
+            folder_id = source.get("id")
+            folder_key = source.get("key") or self._folder_key_for_id(folder_id)
+            folder_label = source.get("label") or folder_key
+            try:
+                page, _ = self.graph.get_messages(
+                    folder_id=folder_id,
+                    top=EMAIL_COMPANY_FETCH_PER_FOLDER,
+                    search=search_hint,
+                    filter_str=filter_hint,
+                )
+            except Exception:
+                try:
+                    page, _ = self.graph.get_messages(
+                        folder_id=folder_id,
+                        top=EMAIL_COMPANY_FETCH_PER_FOLDER,
+                    )
+                except Exception as exc:
+                    errors.append(f"{folder_label}: {exc}")
+                    continue
+
+            try:
+                for msg in page or []:
+                    msg_with_folder = self._with_folder_meta(msg, folder_id, folder_key, folder_label)
+                    if not self._message_matches_company_filter(msg_with_folder, company_query):
+                        continue
+                    msg_id = msg_with_folder.get("id")
+                    if not msg_id:
+                        continue
+                    existing = deduped.get(msg_id)
+                    if existing is None or msg_with_folder.get("receivedDateTime", "") > existing.get("receivedDateTime", ""):
+                        deduped[msg_id] = msg_with_folder
+            except Exception as exc:
+                errors.append(f"{folder_label}: {exc}")
+
+        messages = sorted(deduped.values(), key=lambda msg: msg.get("receivedDateTime", ""), reverse=True)
+        return {"query": company_query, "messages": messages, "errors": errors, "fetched_at": time.time()}
+
+    def _on_company_messages_loaded(self, payload):
+        query = (payload.get("query") or "").strip().lower()
+        self.company_query_inflight.discard(query)
+        self.company_query_cache[query] = {
+            "messages": list(payload.get("messages") or []),
+            "errors": list(payload.get("errors") or []),
+            "fetched_at": float(payload.get("fetched_at") or time.time()),
+        }
+
+        if query != (self.company_filter_domain or "").strip().lower():
+            return
+
+        self.company_result_messages = payload.get("messages") or []
+        self.company_folder_filter = self.company_folder_filter or "all"
+        self._apply_company_folder_filter()
+
+        errors = payload.get("errors") or []
+        if errors:
+            self._set_status(
+                f'Loaded {len(self.filtered_messages)} message(s) for "{query}" with partial folder errors.'
+            )
+        else:
+            self._set_status(f'Loaded {len(self.filtered_messages)} message(s) for "{query}" across folders.')
+
+    def _on_company_messages_error(self, query, trace_text):
+        self.company_query_inflight.discard((query or "").strip().lower())
+        if (query or "").strip().lower() != (self.company_filter_domain or "").strip().lower():
+            return
+        self._set_status(f'Unable to refresh "{query}" right now.')
+        print(trace_text)
+
+    def _company_query_hints(self, query):
+        if hasattr(self, "_parse_company_query"):
+            kind, value = self._parse_company_query(query)
+        else:
+            kind, value = ("text", (query or "").strip().lower())
+        if not value:
+            return None, None
+        if kind == "email":
+            safe_value = value.replace("'", "''")
+            return None, f"from/emailAddress/address eq '{safe_value}'"
+        return value, None
+
+    def _apply_company_folder_filter(self):
+        source_messages = list(self.company_result_messages or [])
+        folder_filter = (self.company_folder_filter or "all").strip().lower() or "all"
+        if folder_filter != "all":
+            source_messages = [msg for msg in source_messages if (msg.get("_folder_key") or "").strip().lower() == folder_filter]
+
+        search_text = (self.search_input.text() or "").strip().lower()
+        if search_text:
+            source_messages = [msg for msg in source_messages if self._message_matches_search(msg, search_text)]
+
+        self.current_messages = source_messages
+        self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
+        self._render_message_list()
+        if self.message_list.count() > 0:
+            self.message_list.setCurrentRow(0)
+            self._show_message_list()
+        else:
+            self._show_message_list()
+            self._clear_detail_view("No messages match this company filter.")
+
+    @staticmethod
+    def _message_matches_search(msg, search_text):
+        sender = msg.get("from", {}).get("emailAddress", {})
+        haystack = " ".join(
+            [
+                (msg.get("subject") or ""),
+                (msg.get("bodyPreview") or ""),
+                (sender.get("name") or ""),
+                (sender.get("address") or ""),
+            ]
+        ).lower()
+        return search_text in haystack
+
+    @staticmethod
+    def _with_folder_meta(msg, folder_id, folder_key, folder_label=None):
+        enriched = dict(msg or {})
+        enriched["_folder_id"] = folder_id
+        enriched["_folder_key"] = folder_key
+        enriched["_folder_label"] = folder_label or folder_key
+        return enriched
+
+    def _folder_key_for_id(self, folder_id):
+        target_id = (folder_id or "").strip().lower()
+        for source in self.company_folder_sources or []:
+            if (source.get("id") or "").strip().lower() == target_id:
+                return source.get("key") or target_id
+        return target_id
+
+    def _render_message_list(self):
+        self.filtered_messages = list(self.current_messages)
         self.message_list.clear()
         for msg in self.filtered_messages:
             sender = msg.get("from", {}).get("emailAddress", {}).get("name") or "Unknown"
             subject = msg.get("subject") or "(No subject)"
             received = format_date(msg.get("receivedDateTime", ""))
             unread_prefix = "● " if not msg.get("isRead") else ""
-            line = f"{unread_prefix}{subject}\n{sender} · {received}"
+            preview = self._summarize_preview(msg.get("bodyPreview", ""))
+            line = f"{unread_prefix}{subject}\n{sender} · {received} · {preview}"
             item = QListWidgetItem(line)
             item.setData(Qt.UserRole, msg)
             self.message_list.addItem(item)
@@ -283,6 +493,15 @@ class EmailListMixin:
         if len(name) <= ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS:
             return name
         return name[: ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS - 3] + "..."
+
+    @staticmethod
+    def _summarize_preview(text, max_chars=90):
+        compact = " ".join((text or "").split())
+        if not compact:
+            return "No preview available"
+        if len(compact) <= max_chars:
+            return compact
+        return compact[: max_chars - 3].rstrip() + "..."
 
     def _ensure_detail_message_visible(self):
         if not hasattr(self, "message_stack"):

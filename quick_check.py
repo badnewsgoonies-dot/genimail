@@ -38,6 +38,7 @@ PY_FILES = [
     "genimail_qt/cloud_pdf_cache.py",
     "genimail_qt/dialogs.py",
     "genimail_qt/company_manager_dialog.py",
+    "genimail_qt/company_tab_manager_dialog.py",
     "genimail_qt/cloud_pdf_link_dialog.py",
     "genimail_qt/webview_utils.py",
     "genimail_qt/webview_page.py",
