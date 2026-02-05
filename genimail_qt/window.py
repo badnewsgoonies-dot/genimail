@@ -7,7 +7,7 @@ import threading
 from functools import partial
 from urllib.parse import unquote
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -413,6 +413,9 @@ class GeniMailQtWindow(QMainWindow):
         self._toast_label.setWordWrap(True)
         toast_layout.addWidget(self._toast_label, 1)
         self._toast_frame.hide()
+        self._toast_frame.installEventFilter(self)
+        self._toast_label.installEventFilter(self)
+        self._toast_action = None
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
         self._toast_timer.timeout.connect(self._hide_toast)
@@ -439,11 +442,12 @@ class GeniMailQtWindow(QMainWindow):
         y = max(margin, top_offset)
         self._toast_frame.move(x, y)
 
-    def _show_toast(self, message, kind="info", duration_ms=2200):
+    def _show_toast(self, message, kind="info", duration_ms=2200, action=None):
         if not hasattr(self, "_toast_frame"):
             return
         self._set_toast_kind(kind)
         self._toast_label.setText(message)
+        self._toast_action = action
         self._toast_frame.adjustSize()
         self._position_toast()
         self._toast_frame.show()
@@ -453,6 +457,16 @@ class GeniMailQtWindow(QMainWindow):
     def _hide_toast(self):
         if hasattr(self, "_toast_frame"):
             self._toast_frame.hide()
+        self._toast_action = None
+
+    def eventFilter(self, obj, event):
+        if obj in (getattr(self, "_toast_frame", None), getattr(self, "_toast_label", None)):
+            if event.type() == QEvent.MouseButtonPress and callable(getattr(self, "_toast_action", None)):
+                action = self._toast_action
+                self._hide_toast()
+                action()
+                return True
+        return super().eventFilter(obj, event)
 
     def _build_email_tab(self):
         tab = QWidget()
@@ -1423,6 +1437,11 @@ class GeniMailQtWindow(QMainWindow):
         if not path:
             QMessageBox.information(self, "Select Download", "Select a downloaded PDF first.")
             return
+        self._open_download_path(path)
+
+    def _open_download_path(self, path):
+        if not path:
+            return
         if os.path.isfile(path) and path.lower().endswith(".pdf"):
             self._open_pdf_file(path, activate=True)
         elif os.path.isfile(path):
@@ -1780,7 +1799,11 @@ class GeniMailQtWindow(QMainWindow):
                 self._update_cloud_download_list(message_id)
         if path:
             self._set_status(f"Downloaded {os.path.basename(path)}")
-            self._show_toast(f"Download complete · {os.path.basename(path)}", kind="success")
+            self._show_toast(
+                f"Download complete · {os.path.basename(path)}",
+                kind="success",
+                action=lambda p=path: self._open_download_path(p),
+            )
 
     def _find_pdf_tab_index(self, path):
         normalized = path.lower()
