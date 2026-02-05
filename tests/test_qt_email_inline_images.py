@@ -1,5 +1,9 @@
-from genimail_qt import window as window_module
 from genimail_qt.window import GeniMailQtWindow
+from genimail_qt.webview_utils import (
+    is_inline_attachment,
+    normalize_cid_value,
+    replace_cid_sources_with_data_urls,
+)
 
 
 class _FakeGraph:
@@ -18,21 +22,21 @@ class _FakeWindow:
 
 
 def test_normalize_cid_value_handles_prefix_and_angle_brackets():
-    assert window_module._normalize_cid_value("cid:<Banner-123>") == "banner-123"
-    assert window_module._normalize_cid_value("<b@c>") == "b@c"
-    assert window_module._normalize_cid_value("image001.png%4001D123ABC") == "image001.png@01d123abc"
-    assert window_module._normalize_cid_value("") == ""
+    assert normalize_cid_value("cid:<Banner-123>") == "banner-123"
+    assert normalize_cid_value("<b@c>") == "b@c"
+    assert normalize_cid_value("image001.png%4001D123ABC") == "image001.png@01d123abc"
+    assert normalize_cid_value("") == ""
 
 
 def test_is_inline_attachment_detects_inline_flag():
-    assert window_module._is_inline_attachment({"isInline": True})
-    assert not window_module._is_inline_attachment({"isInline": False})
-    assert not window_module._is_inline_attachment({})
+    assert is_inline_attachment({"isInline": True})
+    assert not is_inline_attachment({"isInline": False})
+    assert not is_inline_attachment({})
 
 
 def test_replace_cid_sources_with_data_urls_swaps_known_ids():
     html = '<img src="cid:banner-1"><div style="background:url(cid:logo-2)">x</div>'
-    replaced = window_module._replace_cid_sources_with_data_urls(
+    replaced = replace_cid_sources_with_data_urls(
         html,
         {
             "banner-1": "data:image/png;base64,AAA",
@@ -47,7 +51,7 @@ def test_replace_cid_sources_with_data_urls_swaps_known_ids():
 
 def test_replace_cid_sources_with_data_urls_handles_encoded_outlook_cid():
     html = '<img src="cid:image001.png%4001D123ABC">'
-    replaced = window_module._replace_cid_sources_with_data_urls(
+    replaced = replace_cid_sources_with_data_urls(
         html,
         {"image001.png@01d123abc": "data:image/png;base64,CCC"},
     )

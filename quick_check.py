@@ -6,7 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PY_FILES = [
     "email_app.py",
-    "email_app_v2.py",
     "email_app_qt.py",
     "pdf_takeoff_tool.py",
     "pdf_viewer.py",
@@ -14,31 +13,47 @@ PY_FILES = [
     "genimail/paths.py",
     "genimail/constants.py",
     "genimail/com_runtime.py",
+    "genimail/errors.py",
     "genimail/browser/__init__.py",
     "genimail/browser/errors.py",
     "genimail/browser/runtime.py",
     "genimail/browser/navigation.py",
     "genimail/browser/downloads.py",
     "genimail/browser/host.py",
-    "genimail/ui/theme.py",
-    "genimail/ui/widgets.py",
-    "genimail/ui/tabs.py",
-    "genimail/ui/dialogs.py",
-    "genimail/ui/splash.py",
     "genimail/domain/helpers.py",
     "genimail/domain/link_tools.py",
     "genimail/domain/quotes.py",
     "genimail/infra/cache_store.py",
+    "genimail/infra/cloud_pdf_store.py",
     "genimail/infra/graph_client.py",
     "genimail/infra/config_store.py",
     "genimail/services/mail_sync.py",
     "genimail_qt/__init__.py",
+    "genimail_qt/constants.py",
     "genimail_qt/theme.py",
     "genimail_qt/workers.py",
     "genimail_qt/cloud_pdf_cache.py",
     "genimail_qt/dialogs.py",
+    "genimail_qt/company_manager_dialog.py",
+    "genimail_qt/cloud_pdf_link_dialog.py",
+    "genimail_qt/webview_utils.py",
+    "genimail_qt/webview_page.py",
     "genimail_qt/takeoff_engine.py",
     "genimail_qt/window.py",
+    "genimail_qt/mixins/attachments.py",
+    "genimail_qt/mixins/auth.py",
+    "genimail_qt/mixins/company.py",
+    "genimail_qt/mixins/compose.py",
+    "genimail_qt/mixins/docs.py",
+    "genimail_qt/mixins/email_list.py",
+    "genimail_qt/mixins/email_ui.py",
+    "genimail_qt/mixins/internet.py",
+    "genimail_qt/mixins/layout.py",
+    "genimail_qt/mixins/pdf.py",
+    "genimail_qt/mixins/pdf_ui.py",
+    "genimail_qt/mixins/toast.py",
+    "genimail_qt/mixins/window_state.py",
+    "genimail_qt/mixins/worker.py",
 ]
 
 
@@ -51,7 +66,7 @@ def run(cmd):
 
 def main():
     run([sys.executable, "-m", "py_compile", *PY_FILES])
-    run([sys.executable, "-c", "import email_app, email_app_v2, pdf_viewer, scanner_app_v4; print('imports ok')"])
+    run([sys.executable, "-c", "import email_app, pdf_viewer, scanner_app_v4; print('imports ok')"])
     run([sys.executable, "-m", "pytest", "-q"])
     print("All automated checks passed.")
 

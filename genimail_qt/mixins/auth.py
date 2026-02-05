@@ -1,0 +1,163 @@
+import os
+
+from PySide6.QtWidgets import QMessageBox
+
+from genimail.constants import APP_NAME, DEFAULT_CLIENT_ID, EMAIL_DELTA_FALLBACK_TOP
+from genimail.domain.helpers import token_cache_path_for_client_id
+from genimail.infra.graph_client import GraphClient
+from genimail.services.mail_sync import MailSyncService, collect_new_unread
+
+
+class AuthPollMixin:
+    def _start_authentication(self):
+        self.connect_btn.setEnabled(False)
+        self._set_status("Authenticating...")
+        self._submit(self._auth_worker_task, self._on_authenticated)
+
+    def _reconnect(self):
+        self._poll_timer.stop()
+        self._poll_in_flight = False
+        if self.graph is not None:
+            self.graph.clear_cached_tokens()
+        else:
+            client_id = (self.config.get("client_id") or "").strip() or DEFAULT_CLIENT_ID
+            cache_path = token_cache_path_for_client_id(client_id)
+            if os.path.exists(cache_path):
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+        self.graph = None
+        self.sync_service = None
+        self.current_messages = []
+        self.filtered_messages = []
+        self.message_cache.clear()
+        self.attachment_cache.clear()
+        self.cloud_link_cache.clear()
+        self.known_ids.clear()
+        self.current_message = None
+        self.message_list.clear()
+        self.attachment_list.clear()
+        self.message_header.setText("Disconnected")
+        self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>Reconnect to load mail.</body></html>")
+        self.open_cloud_links_btn.setEnabled(False)
+        self.cloud_links_info.setText("No linked cloud files found")
+        self._set_status("Reconnecting...")
+        self._start_authentication()
+
+    def _auth_worker_task(self):
+        def on_device_code(flow):
+            code = flow.get("user_code", "???")
+            self.auth_code_received.emit(code)
+
+        client_id = (self.config.get("client_id") or "").strip() or None
+        graph = GraphClient(client_id=client_id, on_device_code=on_device_code)
+        if not graph.authenticate():
+            raise RuntimeError("Authentication failed.")
+        profile = graph.get_profile()
+        folders = graph.get_folders()
+        return {"graph": graph, "profile": profile, "folders": folders}
+
+    def _show_auth_code_dialog(self, code):
+        QMessageBox.information(
+            self,
+            "Microsoft Sign In",
+            "Open microsoft.com/devicelogin and enter this code:\n\n"
+            f"{code}\n\n"
+            "Finish sign-in in your browser.",
+        )
+
+    def _on_authenticated(self, result):
+        self.graph = result["graph"]
+        self.sync_service = MailSyncService(self.graph, self.cache)
+        profile = result.get("profile") or {}
+        self.current_user_email = profile.get("mail") or profile.get("userPrincipalName") or ""
+        self.connect_btn.setEnabled(True)
+        self.setWindowTitle(f"{APP_NAME} - {self.current_user_email}")
+        self._set_status(f"Connected as {self.current_user_email}")
+        self._populate_folders(result.get("folders") or [])
+        self._refresh_company_sidebar()
+        self._load_messages()
+        self._start_polling()
+
+    def _start_polling(self):
+        if not self.sync_service:
+            return
+        try:
+            self.cloud_pdf_cache.prune()
+        except Exception as exc:
+            print(f"[CLOUD-CACHE] prune error: {exc}")
+        self._set_status("Connected. Sync active.")
+        self._submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_poll_error)
+        self._poll_timer.start()
+
+    def _init_delta_token_worker(self):
+        self.sync_service.initialize_delta_token(folder_id="inbox")
+        return True
+
+    def _on_delta_token_ready(self, _):
+        self._set_status("Connected. Delta sync ready.")
+
+    def _poll_once(self):
+        if not self.sync_service:
+            return
+        if not self._poll_lock.acquire(blocking=False):
+            return
+        if self._poll_in_flight:
+            self._poll_lock.release()
+            return
+        self._poll_in_flight = True
+        self._submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
+
+    def _poll_worker(self):
+        messages, deleted_ids = self.sync_service.sync_delta_once(
+            folder_id="inbox",
+            fallback_top=EMAIL_DELTA_FALLBACK_TOP,
+        )
+        return {"messages": messages or [], "deleted_ids": deleted_ids or []}
+
+    def _on_poll_result(self, payload):
+        self._poll_in_flight = False
+        self._poll_lock.release()
+
+        updates = payload.get("messages") or []
+        deleted_ids = payload.get("deleted_ids") or []
+        if deleted_ids:
+            deleted_set = set(deleted_ids)
+            self.current_messages = [msg for msg in self.current_messages if msg.get("id") not in deleted_set]
+            self.filtered_messages = [msg for msg in self.filtered_messages if msg.get("id") not in deleted_set]
+            for msg_id in deleted_set:
+                self.message_cache.pop(msg_id, None)
+                self.attachment_cache.pop(msg_id, None)
+                self.cloud_link_cache.pop(msg_id, None)
+                self.known_ids.discard(msg_id)
+
+        new_unread = collect_new_unread(updates, self.known_ids)
+        if updates or deleted_ids:
+            index_by_id = {msg.get("id"): idx for idx, msg in enumerate(self.current_messages) if msg.get("id")}
+            for msg in updates:
+                msg_id = msg.get("id")
+                if not msg_id:
+                    continue
+                idx = index_by_id.get(msg_id)
+                if idx is None:
+                    self.current_messages.insert(0, msg)
+                else:
+                    self.current_messages[idx] = msg
+            self._render_message_list()
+            if self.message_list.count() == 0:
+                self.message_header.setText("No messages")
+        if new_unread:
+            self._set_status(f"{len(new_unread)} new unread message(s)")
+        else:
+            self._set_status("Connected. Sync up to date.")
+
+    def _on_poll_error(self, trace_text):
+        self._poll_in_flight = False
+        if self._poll_lock.locked():
+            self._poll_lock.release()
+        self._set_status("Sync warning. Retrying...")
+        print(trace_text)
+
+
+__all__ = ["AuthPollMixin"]

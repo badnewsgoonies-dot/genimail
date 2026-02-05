@@ -57,12 +57,12 @@ run_email.bat
   - `domain/` — business helpers (HTML cleanup, quote generation)
   - `infra/` — Graph client, config store, cache store
   - `services/` — sync orchestration
-  - `ui/` — theme, widgets, tabs, dialogs, splash
-- `genimail_qt/` — Qt shell, threading helpers, and Qt theme
+- `genimail_qt/` — Qt shell, mixins, and theme
 - `scanner_app_v4.py` — scanner implementation
 - `pdf_viewer.py` — PDF viewer implementation
 - `tests/` — regression and helper tests
 - `quick_check.py` — compile/import/pytest gate
+- `deprecated/` — legacy Tkinter email UI (no longer active)
 
 ## Validate Before Release
 

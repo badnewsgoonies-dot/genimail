@@ -1,6 +1,6 @@
 import pytest
 
-from genimail_qt import window as window_module
+from genimail_qt.mixins import pdf as pdf_module
 from genimail_qt.window import GeniMailQtWindow
 
 
@@ -26,7 +26,7 @@ class _FakeWindow:
 
 
 def test_create_pdf_widget_prefers_qtpdf(monkeypatch):
-    monkeypatch.setattr(window_module, "HAS_QTPDF", True)
+    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
     fake = _FakeWindow(qt_result="qt-view", web_result="web-view")
 
     result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
@@ -36,7 +36,7 @@ def test_create_pdf_widget_prefers_qtpdf(monkeypatch):
 
 
 def test_create_pdf_widget_falls_back_to_webengine(monkeypatch):
-    monkeypatch.setattr(window_module, "HAS_QTPDF", True)
+    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
     fake = _FakeWindow(qt_error=RuntimeError("qt failed"), web_result="web-view")
 
     result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
@@ -46,7 +46,7 @@ def test_create_pdf_widget_falls_back_to_webengine(monkeypatch):
 
 
 def test_create_pdf_widget_uses_webengine_when_qtpdf_unavailable(monkeypatch):
-    monkeypatch.setattr(window_module, "HAS_QTPDF", False)
+    monkeypatch.setattr(pdf_module, "HAS_QTPDF", False)
     fake = _FakeWindow(qt_result="qt-view", web_result="web-view")
 
     result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
@@ -56,7 +56,7 @@ def test_create_pdf_widget_uses_webengine_when_qtpdf_unavailable(monkeypatch):
 
 
 def test_create_pdf_widget_raises_when_all_renderers_fail(monkeypatch):
-    monkeypatch.setattr(window_module, "HAS_QTPDF", True)
+    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
     fake = _FakeWindow(
         qt_error=RuntimeError("qt failed"),
         web_error=RuntimeError("web failed"),

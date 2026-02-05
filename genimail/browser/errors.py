@@ -1,4 +1,7 @@
-class BrowserRuntimeError(RuntimeError):
+from genimail.errors import ExternalServiceError
+
+
+class BrowserRuntimeError(ExternalServiceError):
     """Base browser subsystem error."""
 
 
@@ -13,3 +16,10 @@ class BrowserNavigationError(BrowserRuntimeError):
 class BrowserDownloadError(BrowserRuntimeError):
     """Raised for download failures in browser-driven flows."""
 
+
+__all__ = [
+    "BrowserDownloadError",
+    "BrowserFeatureUnavailableError",
+    "BrowserNavigationError",
+    "BrowserRuntimeError",
+]
