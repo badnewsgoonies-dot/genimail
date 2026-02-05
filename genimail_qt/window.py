@@ -42,7 +42,24 @@ except Exception:
 
 from genimail.browser import BrowserDownloadError
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
-from genimail.constants import APP_NAME, DEFAULT_CLIENT_ID, FOLDER_DISPLAY, POLL_INTERVAL_MS
+from genimail.constants import (
+    APP_NAME,
+    CLOUD_PDF_FAILURE_PREVIEW_MAX,
+    CLOUD_PDF_SOURCE_SUMMARY_MAX,
+    DEFAULT_CLIENT_ID,
+    EMAIL_DELTA_FALLBACK_TOP,
+    EMAIL_LIST_FETCH_TOP,
+    FOLDER_DISPLAY,
+    INTERNET_DEFAULT_URL,
+    POLL_INTERVAL_MS,
+    QT_SPLITTER_LEFT_DEFAULT,
+    QT_SPLITTER_RIGHT_DEFAULT,
+    QT_THREAD_POOL_MAX_WORKERS,
+    QT_WINDOW_DEFAULT_GEOMETRY,
+    QT_WINDOW_MIN_HEIGHT,
+    QT_WINDOW_MIN_WIDTH,
+    TAKEOFF_DEFAULT_COATS,
+)
 from genimail.domain.helpers import (
     build_reply_recipients,
     domain_to_company,
@@ -203,7 +220,7 @@ class GeniMailQtWindow(QMainWindow):
         self._poll_in_flight = False
         self._poll_lock = threading.Lock()
         self.thread_pool = QThreadPool(self)
-        self.thread_pool.setMaxThreadCount(3)
+        self.thread_pool.setMaxThreadCount(QT_THREAD_POOL_MAX_WORKERS)
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_once)
@@ -279,7 +296,7 @@ class GeniMailQtWindow(QMainWindow):
         layout.addLayout(toolbar)
 
         self.internet_view = QWebEngineView()
-        self.internet_view.setUrl(QUrl("https://www.bing.com"))
+        self.internet_view.setUrl(QUrl(INTERNET_DEFAULT_URL))
         layout.addWidget(self.internet_view, 1)
 
         self.web_back_btn.clicked.connect(self.internet_view.back)
@@ -368,7 +385,7 @@ class GeniMailQtWindow(QMainWindow):
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
-        splitter.setSizes([360, 760])
+        splitter.setSizes([QT_SPLITTER_LEFT_DEFAULT, QT_SPLITTER_RIGHT_DEFAULT])
 
         self.folder_list.currentRowChanged.connect(self._on_folder_changed)
         self.company_list.currentRowChanged.connect(self._on_company_filter_changed)
@@ -445,7 +462,7 @@ class GeniMailQtWindow(QMainWindow):
         self.takeoff_height_input = QLineEdit(str(default_wall_height))
         self.takeoff_door_count_input = QLineEdit("0")
         self.takeoff_window_area_input = QLineEdit("0")
-        self.takeoff_coats_input = QLineEdit("1")
+        self.takeoff_coats_input = QLineEdit(str(TAKEOFF_DEFAULT_COATS))
         takeoff_layout.addRow("Linear Feet", self.takeoff_linear_input)
         takeoff_layout.addRow("Wall Height", self.takeoff_height_input)
         takeoff_layout.addRow("Door Count", self.takeoff_door_count_input)
@@ -489,14 +506,15 @@ class GeniMailQtWindow(QMainWindow):
         return tab
 
     def _restore_window_geometry(self):
-        geometry = str(self.config.get("qt_window_geometry", "1280x820"))
+        geometry = str(self.config.get("qt_window_geometry", QT_WINDOW_DEFAULT_GEOMETRY))
         try:
             width_text, height_text = geometry.lower().split("x")
-            width = max(1000, int(width_text))
-            height = max(680, int(height_text))
+            width = max(QT_WINDOW_MIN_WIDTH, int(width_text))
+            height = max(QT_WINDOW_MIN_HEIGHT, int(height_text))
         except Exception:
-            width = 1280
-            height = 820
+            fallback_width, fallback_height = QT_WINDOW_DEFAULT_GEOMETRY.lower().split("x")
+            width = max(QT_WINDOW_MIN_WIDTH, int(fallback_width))
+            height = max(QT_WINDOW_MIN_HEIGHT, int(fallback_height))
         self.resize(width, height)
 
     def closeEvent(self, event):
@@ -630,7 +648,10 @@ class GeniMailQtWindow(QMainWindow):
         self._submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
 
     def _poll_worker(self):
-        messages, deleted_ids = self.sync_service.sync_delta_once(folder_id="inbox", fallback_top=20)
+        messages, deleted_ids = self.sync_service.sync_delta_once(
+            folder_id="inbox",
+            fallback_top=EMAIL_DELTA_FALLBACK_TOP,
+        )
         return {"messages": messages or [], "deleted_ids": deleted_ids or []}
 
     def _on_poll_result(self, payload):
@@ -768,7 +789,7 @@ class GeniMailQtWindow(QMainWindow):
         folder_id = self.current_folder_id
         self._set_status("Loading messages...")
         self._submit(
-            lambda: self.graph.get_messages(folder_id=folder_id, top=100, search=search_text)[0],
+            lambda: self.graph.get_messages(folder_id=folder_id, top=EMAIL_LIST_FETCH_TOP, search=search_text)[0],
             self._on_messages_loaded,
         )
 
@@ -891,7 +912,9 @@ class GeniMailQtWindow(QMainWindow):
         self.open_cloud_links_btn.setEnabled(bool(cloud_links))
         if cloud_links:
             sources = sorted({link.get("source", "External") for link in cloud_links})
-            summary = ", ".join(sources[:3]) + ("..." if len(sources) > 3 else "")
+            summary = ", ".join(sources[:CLOUD_PDF_SOURCE_SUMMARY_MAX]) + (
+                "..." if len(sources) > CLOUD_PDF_SOURCE_SUMMARY_MAX else ""
+            )
             self.cloud_links_info.setText(f"{len(cloud_links)} linked cloud file(s) detected · {summary}")
         else:
             self.cloud_links_info.setText("No linked cloud files found")
@@ -1028,7 +1051,8 @@ class GeniMailQtWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Some Links Failed",
-                "Could not open all selected links:\n\n" + "\n".join(failures[:8]),
+                "Could not open all selected links:\n\n"
+                + "\n".join(failures[:CLOUD_PDF_FAILURE_PREVIEW_MAX]),
             )
 
     def _open_compose_dialog(self, mode):
@@ -1289,7 +1313,7 @@ class GeniMailQtWindow(QMainWindow):
         height_raw = self.takeoff_height_input.text().strip()
         door_count_raw = self.takeoff_door_count_input.text().strip() or "0"
         window_area_raw = self.takeoff_window_area_input.text().strip() or "0"
-        coats_raw = self.takeoff_coats_input.text().strip() or "1"
+        coats_raw = self.takeoff_coats_input.text().strip() or str(TAKEOFF_DEFAULT_COATS)
 
         if not linear_raw or not height_raw:
             QMessageBox.information(self, "Missing Inputs", "Provide linear feet and wall height.")

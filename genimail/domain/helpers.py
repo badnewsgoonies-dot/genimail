@@ -4,7 +4,16 @@ import os
 import re
 from datetime import datetime
 
-from genimail.constants import DEFAULT_CLIENT_ID
+from genimail.constants import (
+    BYTES_PER_KB,
+    BYTES_PER_MB,
+    CM_PER_INCH,
+    DEFAULT_CLIENT_ID,
+    INCHES_PER_FOOT,
+    INCHES_PER_METER,
+    MM_PER_INCH,
+    TOKEN_CACHE_ID_HASH_CHARS,
+)
 from genimail.paths import CONFIG_DIR, TOKEN_CACHE_FILE
 
 UNIT_CHOICES = ("ft", "in", "mm", "cm", "m")
@@ -29,13 +38,13 @@ def parse_length_to_inches(raw: str, default_unit: str = "in") -> float:
         if unit == "in":
             return value
         if unit == "ft":
-            return value * 12.0
+            return value * INCHES_PER_FOOT
         if unit == "mm":
-            return value / 25.4
+            return value / MM_PER_INCH
         if unit == "cm":
-            return value / 2.54
+            return value / CM_PER_INCH
         if unit == "m":
-            return value * 39.37007874015748
+            return value * INCHES_PER_METER
         raise ValueError(f"Unsupported unit: {unit}")
 
     if "'" in s:
@@ -47,7 +56,7 @@ def parse_length_to_inches(raw: str, default_unit: str = "in") -> float:
             right = right.replace('"', "").replace("in", "").strip()
             if right:
                 inches = float(right)
-        return feet * 12.0 + inches
+        return feet * INCHES_PER_FOOT + inches
 
     if "ft" in s:
         parts = s.split("ft", 1)
@@ -58,7 +67,7 @@ def parse_length_to_inches(raw: str, default_unit: str = "in") -> float:
             rest = rest.replace("in", "").replace('"', "").strip()
             if rest:
                 inches = float(rest)
-        return feet * 12.0 + inches
+        return feet * INCHES_PER_FOOT + inches
 
     unit_re = re.compile(r'([+-]?\d+(?:\.\d+)?)\s*(mm|cm|ft|in|m)')
     matches = list(unit_re.finditer(s))
@@ -84,7 +93,7 @@ def token_cache_path_for_client_id(client_id: str) -> str:
     cid = (client_id or DEFAULT_CLIENT_ID).strip()
     if cid == DEFAULT_CLIENT_ID:
         return TOKEN_CACHE_FILE
-    digest = hashlib.sha1(cid.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(cid.encode("utf-8")).hexdigest()[:TOKEN_CACHE_ID_HASH_CHARS]
     return os.path.join(CONFIG_DIR, f"token_cache_{digest}.json")
 
 
@@ -159,11 +168,11 @@ def format_size(size_bytes):
     """Format file size for display."""
     if not size_bytes:
         return ""
-    if size_bytes < 1024:
+    if size_bytes < BYTES_PER_KB:
         return f"{size_bytes} B"
-    if size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    return f"{size_bytes / (1024 * 1024):.1f} MB"
+    if size_bytes < BYTES_PER_MB:
+        return f"{size_bytes / BYTES_PER_KB:.1f} KB"
+    return f"{size_bytes / BYTES_PER_MB:.1f} MB"
 
 
 def build_reply_recipients(reply_msg, current_user_email="", include_all=False):

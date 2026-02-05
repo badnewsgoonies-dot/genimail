@@ -1,6 +1,14 @@
 from dataclasses import dataclass
 from typing import Iterable
 
+from genimail.constants import (
+    INCHES_PER_FOOT,
+    TAKEOFF_DEFAULT_COATS,
+    TAKEOFF_DEFAULT_DOOR_HEIGHT_FEET,
+    TAKEOFF_DEFAULT_DOOR_WIDTH_FEET,
+    TAKEOFF_DOOR_ESTIMATE_LINEAR_FEET,
+    TAKEOFF_OPENING_RECT_FIELD_COUNT,
+)
 from genimail.domain.helpers import parse_length_to_inches
 
 try:
@@ -28,13 +36,13 @@ class TakeoffResult:
 
 def parse_length_to_feet(raw: str, default_unit: str = "ft") -> float:
     inches = parse_length_to_inches(raw, default_unit=default_unit)
-    return inches / 12.0
+    return inches / INCHES_PER_FOOT
 
 
 def estimate_door_count(linear_feet: float) -> int:
     if linear_feet <= 0:
         return 0
-    return max(1, round(linear_feet / 42.0))
+    return max(1, round(linear_feet / TAKEOFF_DOOR_ESTIMATE_LINEAR_FEET))
 
 
 def _ensure_shapely() -> None:
@@ -47,10 +55,10 @@ def compute_takeoff(
     linear_feet: float,
     wall_height_feet: float,
     door_count: int = 0,
-    door_width_feet: float = 3.0,
-    door_height_feet: float = 6.6667,
+    door_width_feet: float = TAKEOFF_DEFAULT_DOOR_WIDTH_FEET,
+    door_height_feet: float = TAKEOFF_DEFAULT_DOOR_HEIGHT_FEET,
     window_area_sqft: float = 0.0,
-    coats: int = 1,
+    coats: int = TAKEOFF_DEFAULT_COATS,
 ) -> TakeoffResult:
     linear = max(0.0, float(linear_feet))
     wall_height = max(0.0, float(wall_height_feet))
@@ -77,7 +85,7 @@ def compute_floor_plan(
     points: Iterable[tuple[float, float]],
     *,
     scale_factor: float = 1.0,
-    coats: int = 1,
+    coats: int = TAKEOFF_DEFAULT_COATS,
 ) -> TakeoffResult:
     """Compute area and perimeter from an ordered polygon point sequence."""
     _ensure_shapely()
@@ -138,7 +146,7 @@ def compute_wall_elevation(
     wall_length_feet: float,
     wall_height_feet: float,
     openings: Iterable[tuple[float, float, float, float]] | None = None,
-    coats: int = 1,
+    coats: int = TAKEOFF_DEFAULT_COATS,
 ) -> TakeoffResult:
     """Compute wall net paint area by clipping rectangular openings to wall bounds."""
     _ensure_shapely()
@@ -163,7 +171,7 @@ def compute_wall_elevation(
     wall_polygon = box(0, 0, linear, height)
     clipped_openings = []
     for opening in openings or []:
-        if len(opening) != 4:
+        if len(opening) != TAKEOFF_OPENING_RECT_FIELD_COUNT:
             continue
         x, y, width, opening_height = (float(opening[0]), float(opening[1]), float(opening[2]), float(opening[3]))
         width = max(0.0, width)

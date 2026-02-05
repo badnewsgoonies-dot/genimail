@@ -5,6 +5,18 @@ import time
 from dataclasses import dataclass
 
 from genimail.browser import download_url_content, require_pdf_bytes
+from genimail.constants import (
+    BYTES_PER_MB,
+    CLOUD_PDF_CACHE_DEFAULT_MAX_MB,
+    CLOUD_PDF_CACHE_DEFAULT_TTL_HOURS,
+    CLOUD_PDF_CACHE_FILENAME_HASH_CHARS,
+    CLOUD_PDF_CACHE_MAX_MB,
+    CLOUD_PDF_CACHE_MAX_TTL_HOURS,
+    CLOUD_PDF_CACHE_MIN_MB,
+    CLOUD_PDF_CACHE_MIN_TTL_HOURS,
+    CLOUD_PDF_CACHE_SAFE_FILENAME_MAX_CHARS,
+    SECONDS_PER_HOUR,
+)
 from genimail.paths import PDF_DIR
 
 
@@ -16,7 +28,7 @@ def _safe_filename(name: str, fallback: str = "linked.pdf") -> str:
         value = fallback
     if not value.lower().endswith(".pdf"):
         value += ".pdf"
-    return value[:120]
+    return value[:CLOUD_PDF_CACHE_SAFE_FILENAME_MAX_CHARS]
 
 
 def url_key(url: str) -> str:
@@ -38,27 +50,27 @@ class CloudPdfCache:
         os.makedirs(self.cache_dir, exist_ok=True)
 
     def _ttl_seconds(self) -> int:
-        raw = self.config_get("cloud_pdf_cache_ttl_hours", 24 * 7)
+        raw = self.config_get("cloud_pdf_cache_ttl_hours", CLOUD_PDF_CACHE_DEFAULT_TTL_HOURS)
         try:
             hours = int(raw)
         except (TypeError, ValueError):
-            hours = 24 * 7
-        hours = max(1, min(hours, 24 * 365))
-        return hours * 3600
+            hours = CLOUD_PDF_CACHE_DEFAULT_TTL_HOURS
+        hours = max(CLOUD_PDF_CACHE_MIN_TTL_HOURS, min(hours, CLOUD_PDF_CACHE_MAX_TTL_HOURS))
+        return hours * SECONDS_PER_HOUR
 
     def _max_cache_bytes(self) -> int:
-        raw = self.config_get("cloud_pdf_cache_max_mb", 2048)
+        raw = self.config_get("cloud_pdf_cache_max_mb", CLOUD_PDF_CACHE_DEFAULT_MAX_MB)
         try:
             mb = int(raw)
         except (TypeError, ValueError):
-            mb = 2048
-        mb = max(128, min(mb, 20_480))
-        return mb * 1024 * 1024
+            mb = CLOUD_PDF_CACHE_DEFAULT_MAX_MB
+        mb = max(CLOUD_PDF_CACHE_MIN_MB, min(mb, CLOUD_PDF_CACHE_MAX_MB))
+        return mb * BYTES_PER_MB
 
     def _build_cached_path(self, url: str, suggested_name: str) -> str:
         key = url_key(url)
         base = os.path.splitext(_safe_filename(suggested_name))[0]
-        filename = f"{base}_{key[:12]}.pdf"
+        filename = f"{base}_{key[:CLOUD_PDF_CACHE_FILENAME_HASH_CHARS]}.pdf"
         return os.path.join(self.cache_dir, filename)
 
     def get_entry(self, url: str):

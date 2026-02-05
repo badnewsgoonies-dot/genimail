@@ -1,6 +1,11 @@
 import json
 import os
 
+from genimail.constants import (
+    CLOUD_PDF_CACHE_DEFAULT_MAX_MB,
+    CLOUD_PDF_CACHE_DEFAULT_TTL_HOURS,
+    TAKEOFF_DEFAULT_WALL_HEIGHT,
+)
 from genimail.paths import CONFIG_DIR, CONFIG_FILE, DEFAULT_QUOTE_TEMPLATE_FILE, QUOTE_DIR
 
 
@@ -18,9 +23,9 @@ class Config:
             "window_geometry": "1100x700",
             "quote_template_path": DEFAULT_QUOTE_TEMPLATE_FILE,
             "quote_output_dir": QUOTE_DIR,
-            "cloud_pdf_cache_ttl_hours": 168,
-            "cloud_pdf_cache_max_mb": 2048,
-            "takeoff_default_wall_height": "8ft",
+            "cloud_pdf_cache_ttl_hours": CLOUD_PDF_CACHE_DEFAULT_TTL_HOURS,
+            "cloud_pdf_cache_max_mb": CLOUD_PDF_CACHE_DEFAULT_MAX_MB,
+            "takeoff_default_wall_height": TAKEOFF_DEFAULT_WALL_HEIGHT,
             "door_finder_enabled": True,
         }
         self.load()
