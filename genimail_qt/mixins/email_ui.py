@@ -7,13 +7,15 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QPushButton,
+    QScrollArea,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from genimail.constants import QT_SPLITTER_LEFT_DEFAULT, QT_SPLITTER_RIGHT_DEFAULT
-from genimail_qt.constants import COMPANY_STAR_ICON
+from genimail_qt.constants import ATTACHMENT_THUMBNAIL_HEIGHT_PX, COMPANY_STAR_ICON
 
 
 class EmailUiMixin:
@@ -77,28 +79,37 @@ class EmailUiMixin:
         company_body_layout.addLayout(company_actions)
         left_layout.addWidget(self.company_body, 1)
 
-        left_layout.addWidget(QLabel("Messages"))
-        self.message_list = QListWidget()
-        left_layout.addWidget(self.message_list, 2)
-
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        self.message_header = QLabel("Select a message")
-        right_layout.addWidget(self.message_header)
+        self.message_stack = QStackedWidget()
 
-        self.email_preview = self._create_web_view("email")
-        preview_settings = self.email_preview.settings()
-        preview_settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
-        preview_settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
-        preview_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-        self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>No message selected.</body></html>")
-        right_layout.addWidget(self.email_preview, 1)
+        list_page = QWidget()
+        list_layout = QVBoxLayout(list_page)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.addWidget(QLabel("Messages"))
+        self.message_list = QListWidget()
+        list_layout.addWidget(self.message_list, 1)
+        self.message_stack.addWidget(list_page)
+
+        detail_page = QWidget()
+        detail_layout = QVBoxLayout(detail_page)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+
+        back_row = QHBoxLayout()
+        self.back_to_list_btn = QPushButton("Back to list")
+        self.back_to_list_btn.setObjectName("backToListBtn")
+        back_row.addWidget(self.back_to_list_btn)
+        back_row.addStretch(1)
+        detail_layout.addLayout(back_row)
 
         attach_box = QGroupBox("Attachments")
         attach_layout = QVBoxLayout(attach_box)
+        self.attach_container = self._build_attachment_thumbnails()
+        attach_layout.addWidget(self.attach_container)
         self.attachment_list = QListWidget()
-        attach_layout.addWidget(self.attachment_list, 1)
+        self.attachment_list.hide()
+        attach_layout.addWidget(self.attachment_list)
         self.cloud_links_info = QLabel("No linked cloud files found")
         attach_layout.addWidget(self.cloud_links_info)
         self.cloud_download_label = QLabel("Downloaded PDFs")
@@ -121,7 +132,21 @@ class EmailUiMixin:
         attach_buttons.addWidget(self.open_cloud_download_btn)
         attach_buttons.addStretch(1)
         attach_layout.addLayout(attach_buttons)
-        right_layout.addWidget(attach_box)
+        detail_layout.addWidget(attach_box)
+
+        self.message_header = QLabel("Select a message")
+        detail_layout.addWidget(self.message_header)
+
+        self.email_preview = self._create_web_view("email")
+        preview_settings = self.email_preview.settings()
+        preview_settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
+        preview_settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        preview_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>No message selected.</body></html>")
+        detail_layout.addWidget(self.email_preview, 1)
+
+        self.message_stack.addWidget(detail_page)
+        right_layout.addWidget(self.message_stack, 1)
 
         action_row = QHBoxLayout()
         self.reply_btn = QPushButton("Reply")
@@ -153,7 +178,9 @@ class EmailUiMixin:
         self.manage_companies_btn.clicked.connect(self._open_company_manager)
         self.search_btn.clicked.connect(self._load_messages)
         self.search_input.returnPressed.connect(self._load_messages)
-        self.message_list.currentRowChanged.connect(self._on_message_selected)
+        self.message_list.currentRowChanged.connect(self._on_message_row_changed)
+        self.message_list.itemActivated.connect(self._on_message_opened)
+        self.back_to_list_btn.clicked.connect(self._show_message_list)
         self.open_attachment_btn.clicked.connect(self._open_selected_attachment)
         self.save_attachment_btn.clicked.connect(self._save_selected_attachment)
         self.open_cloud_links_btn.clicked.connect(self._open_cloud_links_for_current)
@@ -165,7 +192,45 @@ class EmailUiMixin:
         self.forward_btn.clicked.connect(lambda: self._open_compose_dialog("forward"))
         self._refresh_company_sidebar()
         self._set_company_collapsed(bool(self.config.get("company_collapsed", False)), persist=False)
+        self._show_message_list()
         return tab
+
+    def _build_attachment_thumbnails(self):
+        container = QWidget()
+        container.setObjectName("attachmentThumbnails")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedHeight(ATTACHMENT_THUMBNAIL_HEIGHT_PX)
+
+        inner = QWidget()
+        self.thumbnail_layout = QHBoxLayout(inner)
+        self.thumbnail_layout.setContentsMargins(8, 8, 8, 8)
+        self.thumbnail_layout.setSpacing(8)
+        self.thumbnail_layout.addStretch(1)
+
+        scroll.setWidget(inner)
+        container_layout.addWidget(scroll)
+        container.hide()
+        return container
+
+    def _show_message_list(self):
+        if not hasattr(self, "message_stack"):
+            return
+        self.message_stack.setCurrentIndex(0)
+        if hasattr(self, "_list_scroll_pos"):
+            self.message_list.verticalScrollBar().setValue(self._list_scroll_pos)
+
+    def _show_message_detail(self):
+        if not hasattr(self, "message_stack"):
+            return
+        self._list_scroll_pos = self.message_list.verticalScrollBar().value()
+        self.message_stack.setCurrentIndex(1)
 
 
 __all__ = ["EmailUiMixin"]

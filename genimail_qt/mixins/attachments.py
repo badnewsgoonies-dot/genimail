@@ -19,6 +19,34 @@ class EmailAttachmentMixin:
             return None
         return item.data(Qt.UserRole)
 
+    def _select_attachment_by_id(self, attachment_id):
+        if not attachment_id:
+            return False
+        for index in range(self.attachment_list.count()):
+            item = self.attachment_list.item(index)
+            data = item.data(Qt.UserRole) if item is not None else None
+            if (data or {}).get("id") == attachment_id:
+                self.attachment_list.setCurrentRow(index)
+                return True
+        return False
+
+    def _on_thumbnail_clicked(self, attachment):
+        if not attachment:
+            return
+        attachment_id = attachment.get("id")
+        if self._select_attachment_by_id(attachment_id):
+            self._open_selected_attachment()
+            return
+
+        message_id = (self.current_message or {}).get("id")
+        if not message_id or not attachment_id:
+            return
+        self._set_status("Downloading attachment...")
+        self.workers.submit(
+            lambda: self._download_attachment_bytes(message_id, attachment_id),
+            self._on_open_attachment_ready,
+        )
+
     def _selected_cloud_download(self):
         item = self.cloud_download_list.currentItem()
         if item is None:
@@ -88,7 +116,7 @@ class EmailAttachmentMixin:
         if not message_id:
             return
         self._set_status("Downloading attachment...")
-        self._submit(
+        self.workers.submit(
             lambda: self._download_attachment_bytes(message_id, attachment.get("id")),
             self._on_open_attachment_ready,
         )
@@ -118,7 +146,7 @@ class EmailAttachmentMixin:
         if not target_path:
             return
         self._set_status("Saving attachment...")
-        self._submit(
+        self.workers.submit(
             lambda: self._download_attachment_bytes(message_id, attachment.get("id")),
             partial(self._on_save_attachment_ready, target_path=target_path),
         )
@@ -150,7 +178,7 @@ class EmailAttachmentMixin:
                 return
 
         self._set_status(f"Opening {len(selected_links)} linked PDF(s)...")
-        self._submit(
+        self.workers.submit(
             lambda: self._download_cloud_links(message_id, selected_links),
             self._on_cloud_links_downloaded,
         )

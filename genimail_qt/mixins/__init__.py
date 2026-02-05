@@ -9,9 +9,7 @@ from genimail_qt.mixins.internet import InternetMixin
 from genimail_qt.mixins.layout import LayoutMixin
 from genimail_qt.mixins.pdf import PdfMixin
 from genimail_qt.mixins.pdf_ui import PdfUiMixin
-from genimail_qt.mixins.toast import ToastMixin
 from genimail_qt.mixins.window_state import WindowStateMixin
-from genimail_qt.mixins.worker import WorkerMixin
 
 __all__ = [
     "AuthPollMixin",
@@ -25,7 +23,5 @@ __all__ = [
     "LayoutMixin",
     "PdfMixin",
     "PdfUiMixin",
-    "ToastMixin",
     "WindowStateMixin",
-    "WorkerMixin",
 ]

@@ -81,6 +81,18 @@ QPushButton#companyInlineButton:hover {
     background: #eff4fc;
     border-color: #9db2d0;
 }
+QPushButton#backToListBtn {
+    background: transparent;
+    border: none;
+    color: #1f6feb;
+    font-weight: 600;
+    padding: 4px 8px;
+}
+QPushButton#backToListBtn:hover {
+    text-decoration: underline;
+    background: transparent;
+    border: none;
+}
 QLabel#companyFilterBadge {
     background: #edf5ff;
     border: 1px solid #c7dcff;
@@ -128,6 +140,28 @@ QGroupBox::title {
     padding: 0 4px;
     color: #475467;
     font-weight: 600;
+}
+QWidget#attachmentThumbnails {
+    background: #f8fafd;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+}
+QPushButton#attachmentThumbnail {
+    min-width: 92px;
+    max-width: 120px;
+    min-height: 68px;
+    text-align: left;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.2;
+}
+QPushButton#attachmentThumbnail:hover {
+    border-color: #1f6feb;
+    background: #f0f7ff;
+}
+QLabel#attachmentThumbnailOverflow {
+    color: #667085;
+    padding: 8px;
 }
 QListWidget::item {
     padding: 6px 8px;

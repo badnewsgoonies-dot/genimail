@@ -58,8 +58,10 @@ class LayoutMixin:
         self.workspace_tabs.addTab(self.pdf_tab, "PDF Viewer")
         self.workspace_tabs.addTab(self.docs_tab, "Docs/Templates")
         self.workspace_tabs.setCurrentWidget(self.email_tab)
+        if hasattr(self, "_on_workspace_tab_changed"):
+            self.workspace_tabs.currentChanged.connect(self._on_workspace_tab_changed)
         self.setCentralWidget(container)
-        self._build_toast(container)
+        self.toaster.build(container)
 
 
 __all__ = ["LayoutMixin"]

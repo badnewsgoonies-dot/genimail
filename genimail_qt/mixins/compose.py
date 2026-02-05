@@ -60,7 +60,7 @@ class ComposeMixin:
             dialog.mark_send_failed("Not connected.")
             return
         self._set_status("Sending email...")
-        self._submit(
+        self.workers.submit(
             lambda: self._send_mail_worker(payload),
             lambda _: self._on_send_completed(dialog),
             lambda err: dialog.mark_send_failed(err),

@@ -7,6 +7,7 @@ from genimail.constants import POLL_INTERVAL_MS, QT_THREAD_POOL_MAX_WORKERS
 from genimail.infra.cache_store import EmailCache
 from genimail.infra.config_store import Config
 from genimail_qt.cloud_pdf_cache import CloudPdfCache
+from genimail_qt.helpers import Toaster, WorkerManager
 from genimail_qt.mixins import (
     AuthPollMixin,
     CompanyMixin,
@@ -19,22 +20,18 @@ from genimail_qt.mixins import (
     LayoutMixin,
     PdfMixin,
     PdfUiMixin,
-    ToastMixin,
     WindowStateMixin,
-    WorkerMixin,
 )
 from genimail_qt.mixins.pdf import HAS_QTPDF
 
 
 class GeniMailQtWindow(
-    ToastMixin,
     LayoutMixin,
     InternetMixin,
     EmailUiMixin,
     PdfUiMixin,
     DocsMixin,
     WindowStateMixin,
-    WorkerMixin,
     AuthPollMixin,
     CompanyMixin,
     EmailListMixin,
@@ -73,10 +70,32 @@ class GeniMailQtWindow(
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll_once)
+        self.toaster = Toaster(self, lambda: self._top_bar.height() if hasattr(self, "_top_bar") else 0)
+        self.workers = WorkerManager(self.thread_pool, self, self._on_default_worker_error)
 
         self._build_ui()
         self._restore_window_geometry()
         self.auth_code_received.connect(self._show_auth_code_dialog)
+
+    def _on_default_worker_error(self, _trace_text):
+        self.connect_btn.setEnabled(True)
+        self._set_status("Operation failed")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.toaster.reposition()
+        if hasattr(self, "_on_host_geometry_changed"):
+            self._on_host_geometry_changed()
+
+    def eventFilter(self, obj, event):
+        if self.toaster.event_filter(obj, event):
+            return True
+        return super().eventFilter(obj, event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "_on_host_geometry_changed"):
+            self._on_host_geometry_changed()
 
 
 __all__ = ["GeniMailQtWindow", "HAS_QTPDF"]

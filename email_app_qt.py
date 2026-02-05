@@ -16,7 +16,7 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setStyleSheet(APP_STYLE)
     window = GeniMailQtWindow()
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 

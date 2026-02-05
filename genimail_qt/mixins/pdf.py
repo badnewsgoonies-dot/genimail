@@ -153,7 +153,7 @@ class PdfMixin:
                 self._update_cloud_download_list(message_id)
         if path:
             self._set_status(f"Downloaded {os.path.basename(path)}")
-            self._show_toast(
+            self.toaster.show(
                 f"Download complete · {os.path.basename(path)}",
                 kind="success",
                 action=lambda p=path: self._open_download_path(p),

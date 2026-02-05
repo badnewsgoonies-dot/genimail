@@ -12,7 +12,7 @@ class AuthPollMixin:
     def _start_authentication(self):
         self.connect_btn.setEnabled(False)
         self._set_status("Authenticating...")
-        self._submit(self._auth_worker_task, self._on_authenticated)
+        self.workers.submit(self._auth_worker_task, self._on_authenticated)
 
     def _reconnect(self):
         self._poll_timer.stop()
@@ -37,11 +37,9 @@ class AuthPollMixin:
         self.known_ids.clear()
         self.current_message = None
         self.message_list.clear()
-        self.attachment_list.clear()
+        self._show_message_list()
+        self._clear_detail_view("Reconnect to load mail.")
         self.message_header.setText("Disconnected")
-        self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>Reconnect to load mail.</body></html>")
-        self.open_cloud_links_btn.setEnabled(False)
-        self.cloud_links_info.setText("No linked cloud files found")
         self._set_status("Reconnecting...")
         self._start_authentication()
 
@@ -88,7 +86,7 @@ class AuthPollMixin:
         except Exception as exc:
             print(f"[CLOUD-CACHE] prune error: {exc}")
         self._set_status("Connected. Sync active.")
-        self._submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_poll_error)
+        self.workers.submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_poll_error)
         self._poll_timer.start()
 
     def _init_delta_token_worker(self):
@@ -107,7 +105,7 @@ class AuthPollMixin:
             self._poll_lock.release()
             return
         self._poll_in_flight = True
-        self._submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
+        self.workers.submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
 
     def _poll_worker(self):
         messages, deleted_ids = self.sync_service.sync_delta_once(
@@ -146,7 +144,8 @@ class AuthPollMixin:
                     self.current_messages[idx] = msg
             self._render_message_list()
             if self.message_list.count() == 0:
-                self.message_header.setText("No messages")
+                self._show_message_list()
+                self._clear_detail_view("No messages in this folder.")
         if new_unread:
             self._set_status(f"{len(new_unread)} new unread message(s)")
         else:

@@ -30,6 +30,9 @@ PY_FILES = [
     "genimail/services/mail_sync.py",
     "genimail_qt/__init__.py",
     "genimail_qt/constants.py",
+    "genimail_qt/helpers/__init__.py",
+    "genimail_qt/helpers/toaster.py",
+    "genimail_qt/helpers/worker_manager.py",
     "genimail_qt/theme.py",
     "genimail_qt/workers.py",
     "genimail_qt/cloud_pdf_cache.py",
@@ -51,9 +54,7 @@ PY_FILES = [
     "genimail_qt/mixins/layout.py",
     "genimail_qt/mixins/pdf.py",
     "genimail_qt/mixins/pdf_ui.py",
-    "genimail_qt/mixins/toast.py",
     "genimail_qt/mixins/window_state.py",
-    "genimail_qt/mixins/worker.py",
 ]
 
 

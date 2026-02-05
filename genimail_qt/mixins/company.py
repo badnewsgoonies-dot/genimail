@@ -208,6 +208,7 @@ class CompanyMixin:
             return
         self.company_filter_domain = None
         self._render_message_list()
+        self._check_detail_message_visibility()
         self.company_list.blockSignals(True)
         if self.company_list.count() > 0:
             self.company_list.setCurrentRow(0)
@@ -244,6 +245,7 @@ class CompanyMixin:
             self.company_filter_domain = None
             self._render_message_list()
         self._refresh_company_sidebar()
+        self._check_detail_message_visibility()
 
     def _pick_selected_company_color(self):
         domain = self._selected_company_domain()
@@ -274,6 +276,7 @@ class CompanyMixin:
         selected_domain = item.data(Qt.UserRole)
         self.company_filter_domain = (selected_domain or "").strip().lower() or None
         self._render_message_list()
+        self._check_detail_message_visibility()
         self._update_company_filter_badge()
         self._update_company_inline_buttons()
         self._set_status(
@@ -287,6 +290,11 @@ class CompanyMixin:
         if dialog.changed:
             self._refresh_company_sidebar()
             self._render_message_list()
+            self._check_detail_message_visibility()
+
+    def _check_detail_message_visibility(self):
+        if hasattr(self, "_ensure_detail_message_visible"):
+            self._ensure_detail_message_visible()
 
     def _on_folder_changed(self, row):
         if row < 0:
@@ -295,6 +303,8 @@ class CompanyMixin:
         if item is None:
             return
         folder = item.data(Qt.UserRole) or {}
+        self._show_message_list()
+        self._clear_detail_view()
         self.current_folder_id = folder.get("id") or "inbox"
         self._load_messages()
 
