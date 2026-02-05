@@ -326,6 +326,7 @@ class GeniMailQtWindow(QMainWindow):
         root_layout.setSpacing(0)
 
         top_bar = QFrame()
+        self._top_bar = top_bar
         top_bar.setObjectName("topBar")
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(12, 8, 12, 8)
@@ -365,6 +366,7 @@ class GeniMailQtWindow(QMainWindow):
         self.workspace_tabs.addTab(self.docs_tab, "Docs/Templates")
         self.workspace_tabs.setCurrentWidget(self.email_tab)
         self.setCentralWidget(container)
+        self._build_toast(container)
 
     def _build_internet_tab(self):
         tab = QWidget()
@@ -395,6 +397,62 @@ class GeniMailQtWindow(QMainWindow):
         self.web_url_input.returnPressed.connect(self._navigate_internet)
         self.internet_view.urlChanged.connect(self._on_internet_url_changed)
         return tab
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_toast()
+
+    def _build_toast(self, container):
+        self._toast_frame = QFrame(container)
+        self._toast_frame.setObjectName("toastFrame")
+        toast_layout = QHBoxLayout(self._toast_frame)
+        toast_layout.setContentsMargins(10, 6, 10, 6)
+        toast_layout.setSpacing(6)
+        self._toast_label = QLabel("")
+        self._toast_label.setObjectName("toastLabel")
+        self._toast_label.setWordWrap(True)
+        toast_layout.addWidget(self._toast_label, 1)
+        self._toast_frame.hide()
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._hide_toast)
+        self._set_toast_kind("info")
+        self._position_toast()
+
+    def _set_toast_kind(self, kind):
+        if not hasattr(self, "_toast_frame"):
+            return
+        self._toast_frame.setProperty("toastKind", kind)
+        self._toast_frame.style().unpolish(self._toast_frame)
+        self._toast_frame.style().polish(self._toast_frame)
+
+    def _position_toast(self):
+        if not hasattr(self, "_toast_frame"):
+            return
+        container = self.centralWidget()
+        if not container:
+            return
+        self._toast_frame.adjustSize()
+        margin = 16
+        top_offset = (self._top_bar.height() if hasattr(self, "_top_bar") else 0) + 8
+        x = max(margin, container.width() - self._toast_frame.width() - margin)
+        y = max(margin, top_offset)
+        self._toast_frame.move(x, y)
+
+    def _show_toast(self, message, kind="info", duration_ms=2200):
+        if not hasattr(self, "_toast_frame"):
+            return
+        self._set_toast_kind(kind)
+        self._toast_label.setText(message)
+        self._toast_frame.adjustSize()
+        self._position_toast()
+        self._toast_frame.show()
+        self._toast_frame.raise_()
+        self._toast_timer.start(duration_ms)
+
+    def _hide_toast(self):
+        if hasattr(self, "_toast_frame"):
+            self._toast_frame.hide()
 
     def _build_email_tab(self):
         tab = QWidget()
@@ -1722,6 +1780,7 @@ class GeniMailQtWindow(QMainWindow):
                 self._update_cloud_download_list(message_id)
         if path:
             self._set_status(f"Downloaded {os.path.basename(path)}")
+            self._show_toast(f"Download complete · {os.path.basename(path)}", kind="success")
 
     def _find_pdf_tab_index(self, path):
         normalized = path.lower()

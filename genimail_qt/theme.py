@@ -89,6 +89,24 @@ QLabel#companyFilterBadge {
     padding: 4px 8px;
     font-size: 12px;
 }
+QFrame#toastFrame {
+    background: #1f2937;
+    border-radius: 8px;
+    border: 1px solid #2b3648;
+}
+QFrame#toastFrame[toastKind="success"] {
+    background: #1f6feb;
+    border-color: #1f6feb;
+}
+QFrame#toastFrame[toastKind="error"] {
+    background: #b42318;
+    border-color: #b42318;
+}
+QLabel#toastLabel {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 12px;
+}
 QLineEdit, QTextEdit, QListWidget {
     border: 1px solid #d2d8e2;
     border-radius: 6px;
