@@ -63,6 +63,32 @@ QPushButton#primaryButton:hover {
     background: #185fc9;
     border-color: #185fc9;
 }
+QPushButton#companySectionButton {
+    text-align: left;
+    font-weight: 600;
+    background: #eef2f8;
+    border-color: #cfd5df;
+}
+QPushButton#companySectionButton:hover {
+    background: #e7edf7;
+}
+QPushButton#companyInlineButton {
+    padding: 4px 8px;
+    min-height: 24px;
+    background: #f9fafb;
+}
+QPushButton#companyInlineButton:hover {
+    background: #eff4fc;
+    border-color: #9db2d0;
+}
+QLabel#companyFilterBadge {
+    background: #edf5ff;
+    border: 1px solid #c7dcff;
+    border-radius: 6px;
+    color: #1f4b8e;
+    padding: 4px 8px;
+    font-size: 12px;
+}
 QLineEdit, QTextEdit, QListWidget {
     border: 1px solid #d2d8e2;
     border-radius: 6px;
@@ -91,5 +117,17 @@ QListWidget::item {
 QListWidget::item:selected {
     background: #e8f0ff;
     color: #0f172a;
+}
+QListWidget#companyList::item {
+    padding: 8px;
+    margin: 2px 0;
+    border: 1px solid #e6ebf2;
+    border-radius: 6px;
+}
+QListWidget#companyList::item:selected {
+    background: #dfeeff;
+    border: 1px solid #93b7ef;
+    color: #0f172a;
+    font-weight: 600;
 }
 """

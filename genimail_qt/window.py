@@ -6,11 +6,12 @@ import threading
 from functools import partial
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
+    QColorDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -81,6 +82,9 @@ from genimail_qt.takeoff_engine import compute_takeoff, estimate_door_count, par
 from genimail_qt.workers import Worker
 
 JS_CONSOLE_DEBUG_ENV = "GENIMAIL_DEBUG_JS_CONSOLE"
+COMPANY_COLLAPSE_ICON_COLLAPSED = "▶"
+COMPANY_COLLAPSE_ICON_EXPANDED = "▼"
+COMPANY_STAR_ICON = "★"
 
 _JS_NOISE_PATTERNS = (
     "was preloaded using link preload but not used",
@@ -267,6 +271,7 @@ class GeniMailQtWindow(QMainWindow):
         self.cloud_link_cache = {}
         self.known_ids = set()
         self.company_filter_domain = None
+        self.company_domain_labels = {}
         self._poll_in_flight = False
         self._poll_lock = threading.Lock()
         self.thread_pool = QThreadPool(self)
@@ -379,12 +384,43 @@ class GeniMailQtWindow(QMainWindow):
         left_layout.addWidget(self.folder_list, 1)
 
         company_header = QHBoxLayout()
-        company_header.addWidget(QLabel("Companies"))
+        self.company_section_btn = QPushButton()
+        self.company_section_btn.setObjectName("companySectionButton")
+        self.company_section_btn.setCheckable(True)
+        company_header.addWidget(self.company_section_btn, 1)
         self.manage_companies_btn = QPushButton("Manage")
+        self.manage_companies_btn.setObjectName("companyInlineButton")
         company_header.addWidget(self.manage_companies_btn)
         left_layout.addLayout(company_header)
+
+        company_filter_row = QHBoxLayout()
+        self.company_filter_badge = QLabel("")
+        self.company_filter_badge.setObjectName("companyFilterBadge")
+        company_filter_row.addWidget(self.company_filter_badge, 1)
+        self.clear_company_filter_btn = QPushButton("Clear")
+        self.clear_company_filter_btn.setObjectName("companyInlineButton")
+        company_filter_row.addWidget(self.clear_company_filter_btn)
+        left_layout.addLayout(company_filter_row)
+
+        self.company_body = QWidget()
+        company_body_layout = QVBoxLayout(self.company_body)
+        company_body_layout.setContentsMargins(0, 0, 0, 0)
+        company_body_layout.setSpacing(6)
         self.company_list = QListWidget()
-        left_layout.addWidget(self.company_list, 1)
+        self.company_list.setObjectName("companyList")
+        company_body_layout.addWidget(self.company_list, 1)
+        company_actions = QHBoxLayout()
+        self.company_favorite_btn = QPushButton(f"{COMPANY_STAR_ICON} Favorite")
+        self.company_favorite_btn.setObjectName("companyInlineButton")
+        self.company_hide_btn = QPushButton("Hide")
+        self.company_hide_btn.setObjectName("companyInlineButton")
+        self.company_color_btn = QPushButton("Color")
+        self.company_color_btn.setObjectName("companyInlineButton")
+        company_actions.addWidget(self.company_favorite_btn)
+        company_actions.addWidget(self.company_hide_btn)
+        company_actions.addWidget(self.company_color_btn)
+        company_body_layout.addLayout(company_actions)
+        left_layout.addWidget(self.company_body, 1)
 
         left_layout.addWidget(QLabel("Messages"))
         self.message_list = QListWidget()
@@ -439,6 +475,12 @@ class GeniMailQtWindow(QMainWindow):
 
         self.folder_list.currentRowChanged.connect(self._on_folder_changed)
         self.company_list.currentRowChanged.connect(self._on_company_filter_changed)
+        self.company_list.itemClicked.connect(self._on_company_item_clicked)
+        self.company_section_btn.clicked.connect(self._toggle_company_section_from_button)
+        self.clear_company_filter_btn.clicked.connect(self._clear_company_filter)
+        self.company_favorite_btn.clicked.connect(self._toggle_selected_company_favorite)
+        self.company_hide_btn.clicked.connect(self._toggle_selected_company_hidden)
+        self.company_color_btn.clicked.connect(self._pick_selected_company_color)
         self.manage_companies_btn.clicked.connect(self._open_company_manager)
         self.search_btn.clicked.connect(self._load_messages)
         self.search_input.returnPressed.connect(self._load_messages)
@@ -450,6 +492,8 @@ class GeniMailQtWindow(QMainWindow):
         self.reply_btn.clicked.connect(lambda: self._open_compose_dialog("reply"))
         self.reply_all_btn.clicked.connect(lambda: self._open_compose_dialog("reply_all"))
         self.forward_btn.clicked.connect(lambda: self._open_compose_dialog("forward"))
+        self._refresh_company_sidebar()
+        self._set_company_collapsed(bool(self.config.get("company_collapsed", False)), persist=False)
         return tab
 
     def _build_pdf_tab(self):
@@ -770,25 +814,85 @@ class GeniMailQtWindow(QMainWindow):
     def _refresh_company_sidebar(self):
         self.company_list.blockSignals(True)
         self.company_list.clear()
+        self.company_domain_labels = {}
 
         all_item = QListWidgetItem("All Companies")
         all_item.setData(Qt.UserRole, None)
+        all_item.setToolTip("Show messages from every company")
         self.company_list.addItem(all_item)
 
         companies_cfg = self.config.get("companies", {}) or {}
+        colors_cfg = self.config.get("company_colors", {}) or {}
+        favorites = self._get_company_domain_set("company_favorites")
+        hidden = self._get_company_domain_set("company_hidden")
+        order_list = [
+            (domain or "").strip().lower()
+            for domain in (self.config.get("company_order", []) or [])
+            if (domain or "").strip()
+        ]
+        order_index = {domain: idx for idx, domain in enumerate(order_list)}
+
         try:
             domain_rows = self.cache.get_all_domains()
         except Exception:
             domain_rows = []
-
+        rows_by_domain = {}
         for row in domain_rows:
-            domain = (row.get("domain") or "").lower()
-            if not domain:
-                continue
+            domain = (row.get("domain") or "").strip().lower()
+            if domain:
+                rows_by_domain[domain] = row
+
+        domain_pool = set(rows_by_domain.keys())
+        domain_pool.update((domain or "").strip().lower() for domain in companies_cfg.keys())
+        domain_pool.update((domain or "").strip().lower() for domain in colors_cfg.keys())
+        domain_pool.update(favorites)
+        domain_pool.update(hidden)
+        domain_pool.update(order_index.keys())
+        domain_pool = {domain for domain in domain_pool if domain}
+
+        entries = []
+        for domain in domain_pool:
+            row = rows_by_domain.get(domain, {})
             label = row.get("company_label") or companies_cfg.get(domain) or domain_to_company(domain)
             count = row.get("count") or 0
-            item = QListWidgetItem(f"{label} · @{domain} ({count})")
-            item.setData(Qt.UserRole, domain)
+            entry = {
+                "domain": domain,
+                "label": label,
+                "count": count,
+                "favorite": domain in favorites,
+                "hidden": domain in hidden,
+                "color": colors_cfg.get(domain),
+                "order": order_index.get(domain),
+            }
+            entries.append(entry)
+            self.company_domain_labels[domain] = label
+
+        visible_entries = [entry for entry in entries if not entry["hidden"]]
+        visible_entries.sort(
+            key=lambda entry: (
+                0 if entry["favorite"] else 1,
+                entry["order"] if entry["order"] is not None else 10_000,
+                entry["label"].lower(),
+                entry["domain"],
+            )
+        )
+
+        if self.company_filter_domain and self.company_filter_domain not in {entry["domain"] for entry in visible_entries}:
+            self.company_filter_domain = None
+
+        for entry in visible_entries:
+            star = f"{COMPANY_STAR_ICON} " if entry["favorite"] else ""
+            count = int(entry.get("count") or 0)
+            item = QListWidgetItem(f"{star}{entry['label']}\n@{entry['domain']} · {count} email(s)")
+            item.setData(Qt.UserRole, entry["domain"])
+            item.setToolTip(f"Filter messages from @{entry['domain']}")
+            color_hex = entry.get("color")
+            if color_hex:
+                color = QColor(color_hex)
+                if color.isValid():
+                    item.setForeground(color)
+            if entry["favorite"]:
+                item.setBackground(QColor("#fff8e6"))
             self.company_list.addItem(item)
 
         target_index = 0
@@ -799,7 +903,145 @@ class GeniMailQtWindow(QMainWindow):
                     target_index = idx
                     break
         self.company_list.setCurrentRow(target_index)
+        self._update_company_section_header()
+        self._update_company_filter_badge()
+        self._update_company_inline_buttons()
         self.company_list.blockSignals(False)
+
+    def _get_company_domain_set(self, key):
+        values = self.config.get(key, [])
+        if not isinstance(values, list):
+            return set()
+        normalized = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            domain = value.strip().lower()
+            if domain:
+                normalized.add(domain)
+        return normalized
+
+    def _save_company_domain_set(self, key, domains):
+        ordered = sorted({(domain or "").strip().lower() for domain in domains if (domain or "").strip()})
+        self.config.set(key, ordered)
+
+    def _toggle_company_section_from_button(self):
+        self._set_company_collapsed(not self.company_section_btn.isChecked(), persist=True)
+
+    def _set_company_collapsed(self, collapsed, persist=True):
+        if persist:
+            self.config.set("company_collapsed", bool(collapsed))
+        self.company_body.setVisible(not collapsed)
+        self.company_section_btn.blockSignals(True)
+        self.company_section_btn.setChecked(not collapsed)
+        self.company_section_btn.blockSignals(False)
+        self._update_company_section_header()
+
+    def _update_company_section_header(self):
+        collapsed = bool(self.config.get("company_collapsed", False))
+        icon = COMPANY_COLLAPSE_ICON_COLLAPSED if collapsed else COMPANY_COLLAPSE_ICON_EXPANDED
+        visible_count = max(0, self.company_list.count() - 1)
+        self.company_section_btn.setText(f"{icon} Companies ({visible_count})")
+
+    def _update_company_filter_badge(self):
+        domain = (self.company_filter_domain or "").strip().lower()
+        if not domain:
+            self.company_filter_badge.hide()
+            self.clear_company_filter_btn.hide()
+            return
+        label = self.company_domain_labels.get(domain) or domain_to_company(domain)
+        self.company_filter_badge.setText(f"Filtered: {label} (@{domain})")
+        self.company_filter_badge.show()
+        self.clear_company_filter_btn.show()
+
+    def _selected_company_domain(self):
+        item = self.company_list.currentItem()
+        if item is None:
+            return None
+        domain = item.data(Qt.UserRole)
+        return (domain or "").strip().lower() or None
+
+    def _update_company_inline_buttons(self):
+        domain = self._selected_company_domain()
+        enabled = bool(domain)
+        self.company_favorite_btn.setEnabled(enabled)
+        self.company_hide_btn.setEnabled(enabled)
+        self.company_color_btn.setEnabled(enabled)
+        if not enabled:
+            self.company_favorite_btn.setText(f"{COMPANY_STAR_ICON} Favorite")
+            self.company_hide_btn.setText("Hide")
+            self.company_color_btn.setText("Color")
+            return
+        favorites = self._get_company_domain_set("company_favorites")
+        hidden = self._get_company_domain_set("company_hidden")
+        self.company_favorite_btn.setText(
+            f"{COMPANY_STAR_ICON} Unfavorite" if domain in favorites else f"{COMPANY_STAR_ICON} Favorite"
+        )
+        self.company_hide_btn.setText("Show" if domain in hidden else "Hide")
+        colors_cfg = self.config.get("company_colors", {}) or {}
+        self.company_color_btn.setText("Color ✓" if colors_cfg.get(domain) else "Color")
+
+    def _clear_company_filter(self):
+        if not self.company_filter_domain:
+            return
+        self.company_filter_domain = None
+        self._render_message_list()
+        self.company_list.blockSignals(True)
+        if self.company_list.count() > 0:
+            self.company_list.setCurrentRow(0)
+        self.company_list.blockSignals(False)
+        self._update_company_filter_badge()
+        self._update_company_inline_buttons()
+        self._set_status(f"Showing {len(self.filtered_messages)} message(s)")
+
+    def _toggle_selected_company_favorite(self):
+        domain = self._selected_company_domain()
+        if not domain:
+            return
+        favorites = self._get_company_domain_set("company_favorites")
+        if domain in favorites:
+            favorites.remove(domain)
+        else:
+            favorites.add(domain)
+        self._save_company_domain_set("company_favorites", favorites)
+        self._refresh_company_sidebar()
+
+    def _toggle_selected_company_hidden(self):
+        domain = self._selected_company_domain()
+        if not domain:
+            return
+        hidden = self._get_company_domain_set("company_hidden")
+        now_hidden = False
+        if domain in hidden:
+            hidden.remove(domain)
+        else:
+            hidden.add(domain)
+            now_hidden = True
+        self._save_company_domain_set("company_hidden", hidden)
+        if now_hidden and domain == self.company_filter_domain:
+            self.company_filter_domain = None
+            self._render_message_list()
+        self._refresh_company_sidebar()
+
+    def _pick_selected_company_color(self):
+        domain = self._selected_company_domain()
+        if not domain:
+            return
+        colors_cfg = self.config.get("company_colors", {}) or {}
+        initial = QColor(colors_cfg.get(domain) or "#1f6feb")
+        selected = QColorDialog.getColor(initial, self, f"Choose color for @{domain}")
+        if not selected.isValid():
+            return
+        colors_cfg[domain] = selected.name()
+        self.config.set("company_colors", colors_cfg)
+        self._refresh_company_sidebar()
+
+    def _on_company_item_clicked(self, item):
+        if item is None:
+            return
+        domain = (item.data(Qt.UserRole) or "").strip().lower()
+        if domain and domain == self.company_filter_domain:
+            self._clear_company_filter()
 
     def _on_company_filter_changed(self, row):
         if row < 0:
@@ -807,8 +1049,11 @@ class GeniMailQtWindow(QMainWindow):
         item = self.company_list.item(row)
         if item is None:
             return
-        self.company_filter_domain = item.data(Qt.UserRole)
+        selected_domain = item.data(Qt.UserRole)
+        self.company_filter_domain = (selected_domain or "").strip().lower() or None
         self._render_message_list()
+        self._update_company_filter_badge()
+        self._update_company_inline_buttons()
         self._set_status(
             f"Showing {len(self.filtered_messages)} message(s)"
             + (f" for @{self.company_filter_domain}" if self.company_filter_domain else "")

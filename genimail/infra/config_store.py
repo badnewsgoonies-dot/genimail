@@ -17,6 +17,10 @@ class Config:
         self.data = {
             "companies": {},
             "company_colors": {},
+            "company_collapsed": False,
+            "company_favorites": [],
+            "company_hidden": [],
+            "company_order": [],
             "client_id": "",
             "browser_engine": "webview2",
             "pdf_calibration": {},
