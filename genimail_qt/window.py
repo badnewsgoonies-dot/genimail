@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -103,6 +104,8 @@ _LOCAL_JS_SOURCE_PREFIXES = (
     "qrc:",
 )
 
+_CID_SRC_PATTERN = re.compile(r"cid:([^\"'>\s)]+)", re.IGNORECASE)
+
 
 def _is_js_noise_message(message):
     lowered = (message or "").lower()
@@ -116,6 +119,28 @@ def _is_local_console_source(source_id):
     if not lowered:
         return False
     return lowered.startswith(_LOCAL_JS_SOURCE_PREFIXES)
+
+
+def _normalize_cid_value(value):
+    cid = (value or "").strip()
+    if not cid:
+        return ""
+    if cid.lower().startswith("cid:"):
+        cid = cid[4:]
+    cid = cid.strip("<> ").lower()
+    return cid
+
+
+def _replace_cid_sources_with_data_urls(html_content, cid_data_urls):
+    if not html_content or not cid_data_urls:
+        return html_content
+
+    def _replace(match):
+        raw_cid = match.group(1)
+        normalized = _normalize_cid_value(raw_cid)
+        return cid_data_urls.get(normalized, match.group(0))
+
+    return _CID_SRC_PATTERN.sub(_replace, html_content)
 
 
 class FilteredWebEnginePage(QWebEnginePage):
@@ -433,6 +458,10 @@ class GeniMailQtWindow(QMainWindow):
         right_layout.addWidget(self.message_header)
 
         self.email_preview = self._create_web_view("email")
+        preview_settings = self.email_preview.settings()
+        preview_settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)
+        preview_settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        preview_settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
         self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>No message selected.</body></html>")
         right_layout.addWidget(self.email_preview, 1)
 
@@ -1153,9 +1182,52 @@ class GeniMailQtWindow(QMainWindow):
             self._on_message_detail_loaded,
         )
 
+    def _hydrate_inline_attachment_bytes(self, message_id, attachments):
+        hydrated = []
+        for attachment in attachments or []:
+            file_type = attachment.get("@odata.type") == "#microsoft.graph.fileAttachment"
+            inline = bool(attachment.get("isInline"))
+            cid = _normalize_cid_value(attachment.get("contentId") or attachment.get("contentLocation"))
+            if not (file_type and inline and cid):
+                hydrated.append(attachment)
+                continue
+            if attachment.get("contentBytes"):
+                hydrated.append(attachment)
+                continue
+            attachment_id = attachment.get("id")
+            if not attachment_id:
+                hydrated.append(attachment)
+                continue
+            try:
+                full_attachment = self.graph.download_attachment(message_id, attachment_id)
+                merged = dict(attachment)
+                if full_attachment.get("contentBytes"):
+                    merged["contentBytes"] = full_attachment.get("contentBytes")
+                if full_attachment.get("contentType"):
+                    merged["contentType"] = full_attachment.get("contentType")
+                if full_attachment.get("name"):
+                    merged["name"] = full_attachment.get("name")
+                hydrated.append(merged)
+            except Exception:
+                hydrated.append(attachment)
+        return hydrated
+
+    def _build_inline_cid_data_urls(self, attachments):
+        cid_map = {}
+        for attachment in attachments or []:
+            file_type = attachment.get("@odata.type") == "#microsoft.graph.fileAttachment"
+            cid = _normalize_cid_value(attachment.get("contentId") or attachment.get("contentLocation"))
+            content_bytes = attachment.get("contentBytes")
+            if not (file_type and cid and content_bytes):
+                continue
+            mime_type = (attachment.get("contentType") or "application/octet-stream").strip()
+            cid_map[cid] = f"data:{mime_type};base64,{content_bytes}"
+        return cid_map
+
     def _fetch_message_detail(self, message_id):
         detail = self.graph.get_message(message_id)
         attachments = self.graph.get_attachments(message_id)
+        attachments = self._hydrate_inline_attachment_bytes(message_id, attachments)
         body = detail.get("body", {})
         content_type = (body.get("contentType") or "").lower()
         content = body.get("content") or ""
@@ -1188,6 +1260,10 @@ class GeniMailQtWindow(QMainWindow):
         content = body.get("content") or ""
         if content_type == "html":
             html_content = ensure_light_preview_html(content)
+            html_content = _replace_cid_sources_with_data_urls(
+                html_content,
+                self._build_inline_cid_data_urls(attachments),
+            )
         else:
             clean_text = strip_html(content) if content else detail.get("bodyPreview", "")
             html_content = wrap_plain_text_as_html(clean_text)
