@@ -7,7 +7,7 @@ from functools import partial
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWebEngineCore import QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
@@ -79,6 +79,56 @@ from genimail_qt.cloud_pdf_cache import CloudPdfCache
 from genimail_qt.dialogs import CloudPdfLinkDialog, CompanyManagerDialog
 from genimail_qt.takeoff_engine import compute_takeoff, estimate_door_count, parse_length_to_feet
 from genimail_qt.workers import Worker
+
+JS_CONSOLE_DEBUG_ENV = "GENIMAIL_DEBUG_JS_CONSOLE"
+
+_JS_NOISE_PATTERNS = (
+    "was preloaded using link preload but not used",
+    "permissions policy violation: unload is not allowed",
+    "error with permissions-policy header: unrecognized feature",
+    "document-policy http header: unrecognized document policy feature name",
+    "unable to find performance entry for rtb request",
+    "this app error id:",
+    "sj_evt is not defined",
+)
+
+_LOCAL_JS_SOURCE_PREFIXES = (
+    "about:",
+    "data:",
+    "file:",
+    "qrc:",
+)
+
+
+def _is_js_noise_message(message):
+    lowered = (message or "").lower()
+    if not lowered:
+        return False
+    return any(pattern in lowered for pattern in _JS_NOISE_PATTERNS)
+
+
+def _is_local_console_source(source_id):
+    lowered = (source_id or "").lower()
+    if not lowered:
+        return False
+    return lowered.startswith(_LOCAL_JS_SOURCE_PREFIXES)
+
+
+class FilteredWebEnginePage(QWebEnginePage):
+    def __init__(self, surface_name, parent=None):
+        super().__init__(parent)
+        self._surface_name = surface_name
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        if os.getenv(JS_CONSOLE_DEBUG_ENV, "").strip() == "1":
+            super().javaScriptConsoleMessage(level, message, line_number, source_id)
+            return
+        if _is_js_noise_message(message):
+            return
+        if _is_local_console_source(source_id):
+            if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+                print(f"[WEB][{self._surface_name}] {message} ({source_id}:{line_number})")
+            return
 
 
 class ComposeDialog(QDialog):
@@ -295,7 +345,7 @@ class GeniMailQtWindow(QMainWindow):
         toolbar.addWidget(self.web_go_btn)
         layout.addLayout(toolbar)
 
-        self.internet_view = QWebEngineView()
+        self.internet_view = self._create_web_view("internet")
         self.internet_view.setUrl(QUrl(INTERNET_DEFAULT_URL))
         layout.addWidget(self.internet_view, 1)
 
@@ -346,7 +396,7 @@ class GeniMailQtWindow(QMainWindow):
         self.message_header = QLabel("Select a message")
         right_layout.addWidget(self.message_header)
 
-        self.email_preview = QWebEngineView()
+        self.email_preview = self._create_web_view("email")
         self.email_preview.setHtml("<html><body style='font-family:Segoe UI;'>No message selected.</body></html>")
         right_layout.addWidget(self.email_preview, 1)
 
@@ -1207,11 +1257,16 @@ class GeniMailQtWindow(QMainWindow):
         return container
 
     def _create_webengine_pdf_widget(self, normalized_path):
-        view = QWebEngineView()
+        view = self._create_web_view("pdf")
         settings = view.settings()
         settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
         settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
         view.setUrl(QUrl.fromLocalFile(normalized_path))
+        return view
+
+    def _create_web_view(self, surface_name):
+        view = QWebEngineView()
+        view.setPage(FilteredWebEnginePage(surface_name, view))
         return view
 
     def _find_pdf_tab_index(self, path):
