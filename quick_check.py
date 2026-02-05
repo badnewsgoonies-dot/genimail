@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PY_FILES = [
+    "email_app.py",
     "email_app_v2.py",
     "email_app_qt.py",
     "pdf_takeoff_tool.py",
@@ -50,7 +51,7 @@ def run(cmd):
 
 def main():
     run([sys.executable, "-m", "py_compile", *PY_FILES])
-    run([sys.executable, "-c", "import email_app_v2, pdf_viewer, scanner_app_v4; print('imports ok')"])
+    run([sys.executable, "-c", "import email_app, email_app_v2, pdf_viewer, scanner_app_v4; print('imports ok')"])
     run([sys.executable, "-m", "pytest", "-q"])
     print("All automated checks passed.")
 

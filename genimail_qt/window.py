@@ -7,6 +7,7 @@ from functools import partial
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
@@ -28,6 +29,16 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    from PySide6.QtPdf import QPdfDocument
+    from PySide6.QtPdfWidgets import QPdfView
+
+    HAS_QTPDF = True
+except Exception:
+    QPdfDocument = None
+    QPdfView = None
+    HAS_QTPDF = False
 
 from genimail.browser import BrowserDownloadError
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
@@ -1104,6 +1115,9 @@ class GeniMailQtWindow(QMainWindow):
 
     def _open_pdf_file(self, path, activate=False):
         normalized = os.path.abspath(path)
+        if not os.path.isfile(normalized):
+            QMessageBox.warning(self, "PDF Not Found", f"Could not find PDF:\n{normalized}")
+            return
         existing_index = self._find_pdf_tab_index(normalized)
         if existing_index is not None:
             self.pdf_tabs.setCurrentIndex(existing_index)
@@ -1117,14 +1131,64 @@ class GeniMailQtWindow(QMainWindow):
                 self.pdf_tabs.removeTab(idx)
                 widget.deleteLater()
 
-        view = QWebEngineView()
+        try:
+            view = self._create_pdf_widget(normalized)
+        except Exception as exc:
+            QMessageBox.critical(self, "PDF Load Error", f"Could not open PDF:\n{normalized}\n\n{exc}")
+            return
+
         view.setProperty("pdf_path", normalized.lower())
-        view.setUrl(QUrl.fromLocalFile(normalized))
         tab_label = os.path.basename(normalized)
         self.pdf_tabs.addTab(view, tab_label)
         self.pdf_tabs.setCurrentWidget(view)
         if activate:
             self.workspace_tabs.setCurrentWidget(self.pdf_tab)
+        self._set_status(f"Opened PDF: {tab_label}")
+
+    def _create_pdf_widget(self, normalized_path):
+        errors = []
+        if HAS_QTPDF:
+            try:
+                return self._create_qtpdf_widget(normalized_path)
+            except Exception as exc:
+                errors.append(f"QtPdf: {exc}")
+
+        try:
+            return self._create_webengine_pdf_widget(normalized_path)
+        except Exception as exc:
+            errors.append(f"WebEngine: {exc}")
+
+        detail = "; ".join(errors) if errors else "No PDF renderer available."
+        raise RuntimeError(detail)
+
+    def _create_qtpdf_widget(self, normalized_path):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        document = QPdfDocument(container)
+        load_error = document.load(normalized_path)
+        if load_error != QPdfDocument.Error.None_:
+            raise RuntimeError(f"QtPdf load failed: {load_error.name}")
+
+        view = QPdfView(container)
+        view.setDocument(document)
+        view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        view.setPageMode(QPdfView.PageMode.MultiPage)
+        layout.addWidget(view, 1)
+
+        container._pdf_document = document
+        container._pdf_view = view
+        return container
+
+    def _create_webengine_pdf_widget(self, normalized_path):
+        view = QWebEngineView()
+        settings = view.settings()
+        settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
+        settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
+        view.setUrl(QUrl.fromLocalFile(normalized_path))
+        return view
 
     def _find_pdf_tab_index(self, path):
         normalized = path.lower()

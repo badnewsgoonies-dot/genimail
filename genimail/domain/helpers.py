@@ -7,6 +7,77 @@ from datetime import datetime
 from genimail.constants import DEFAULT_CLIENT_ID
 from genimail.paths import CONFIG_DIR, TOKEN_CACHE_FILE
 
+UNIT_CHOICES = ("ft", "in", "mm", "cm", "m")
+
+
+def parse_length_to_inches(raw: str, default_unit: str = "in") -> float:
+    """Parse user-entered lengths into inches."""
+    if raw is None:
+        raise ValueError("Missing length.")
+    s = raw.strip().lower()
+    if not s:
+        raise ValueError("Missing length.")
+
+    s = s.replace("feet", "ft").replace("foot", "ft").replace("inches", "in").replace("inch", "in")
+    s = s.replace("millimeters", "mm").replace("millimeter", "mm")
+    s = s.replace("centimeters", "cm").replace("centimeter", "cm")
+    s = s.replace("meters", "m").replace("meter", "m")
+    s = s.replace("”", "\"").replace("“", "\"").replace("′", "'").replace("″", "\"")
+    s = " ".join(s.split())
+
+    def _unit_value_to_inches(value: float, unit: str) -> float:
+        if unit == "in":
+            return value
+        if unit == "ft":
+            return value * 12.0
+        if unit == "mm":
+            return value / 25.4
+        if unit == "cm":
+            return value / 2.54
+        if unit == "m":
+            return value * 39.37007874015748
+        raise ValueError(f"Unsupported unit: {unit}")
+
+    if "'" in s:
+        left, right = s.split("'", 1)
+        feet = float(left.strip() or "0")
+        right = right.strip()
+        inches = 0.0
+        if right:
+            right = right.replace('"', "").replace("in", "").strip()
+            if right:
+                inches = float(right)
+        return feet * 12.0 + inches
+
+    if "ft" in s:
+        parts = s.split("ft", 1)
+        feet = float(parts[0].strip() or "0")
+        rest = parts[1].strip()
+        inches = 0.0
+        if rest:
+            rest = rest.replace("in", "").replace('"', "").strip()
+            if rest:
+                inches = float(rest)
+        return feet * 12.0 + inches
+
+    unit_re = re.compile(r'([+-]?\d+(?:\.\d+)?)\s*(mm|cm|ft|in|m)')
+    matches = list(unit_re.finditer(s))
+    if matches:
+        consumed = unit_re.sub("", s)
+        consumed = consumed.replace(",", " ").strip()
+        if consumed:
+            raise ValueError(f"Could not parse length: {raw}")
+        total_inches = 0.0
+        for match in matches:
+            total_inches += _unit_value_to_inches(float(match.group(1)), match.group(2))
+        return total_inches
+
+    value = float(s)
+    unit = (default_unit or "in").strip().lower()
+    if unit not in UNIT_CHOICES:
+        unit = "in"
+    return _unit_value_to_inches(value, unit)
+
 
 def token_cache_path_for_client_id(client_id: str) -> str:
     """Return a stable token cache path per client id."""

@@ -31,6 +31,7 @@ GENImail combines daily workflows in one app:
 - Embedded browser/PDF surfaces via Qt WebEngine
 - Pillow + pywin32 (scanner paths)
 - PyMuPDF (PDF rendering)
+- Shapely (advanced takeoff geometry)
 - SQLite (local cache)
 
 ## Quick Start (Windows / PowerShell)
@@ -39,7 +40,7 @@ GENImail combines daily workflows in one app:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python email_app_qt.py
+python email_app.py
 ```
 
 Or run:
@@ -51,6 +52,7 @@ run_email.bat
 ## Project Layout
 
 - `email_app_qt.py` — PySide6 application entrypoint
+- `email_app.py` — stable launcher alias (recommended)
 - `genimail/`
   - `domain/` — business helpers (HTML cleanup, quote generation)
   - `infra/` — Graph client, config store, cache store

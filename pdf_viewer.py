@@ -1,6 +1,5 @@
 import math
 import os
-import re
 import threading
 import time
 from collections import OrderedDict
@@ -20,95 +19,14 @@ try:
 except Exception:
     fitz = None
 
+from genimail.domain.helpers import parse_length_to_inches
+
 _STALE = object()
 UNIT_CHOICES = ("ft", "in", "mm", "cm", "m")
 
 
 def _now_ts() -> int:
     return int(time.time())
-
-
-def parse_length_to_inches(raw: str, default_unit: str = "in") -> float:
-    """
-    Parse user-entered lengths into inches.
-
-    Supported:
-      - "12" (bare number uses default_unit)
-      - "12in", "10ft", "10'6\"", "10 ft 6 in"
-      - "2500mm", "250 cm", "2.4m"
-    """
-    if raw is None:
-        raise ValueError("Missing length.")
-    s = raw.strip().lower()
-    if not s:
-        raise ValueError("Missing length.")
-
-    # Normalize quotes.
-    s = s.replace("feet", "ft").replace("foot", "ft").replace("inches", "in").replace("inch", "in")
-    s = s.replace("millimeters", "mm").replace("millimeter", "mm")
-    s = s.replace("centimeters", "cm").replace("centimeter", "cm")
-    s = s.replace("meters", "m").replace("meter", "m")
-    s = s.replace("”", "\"").replace("“", "\"").replace("′", "'").replace("″", "\"")
-    s = " ".join(s.split())
-
-    def _unit_value_to_inches(value: float, unit: str) -> float:
-        if unit == "in":
-            return value
-        if unit == "ft":
-            return value * 12.0
-        if unit == "mm":
-            return value / 25.4
-        if unit == "cm":
-            return value / 2.54
-        if unit == "m":
-            return value * 39.37007874015748
-        raise ValueError(f"Unsupported unit: {unit}")
-
-    # 10' 6"
-    if "'" in s:
-        left, right = s.split("'", 1)
-        feet = float(left.strip() or "0")
-        right = right.strip()
-        inches = 0.0
-        if right:
-            right = right.replace('"', "").replace("in", "").strip()
-            if right:
-                inches = float(right)
-        return feet * 12.0 + inches
-
-    # 10 ft 6 in
-    if "ft" in s:
-        parts = s.split("ft", 1)
-        feet = float(parts[0].strip() or "0")
-        rest = parts[1].strip()
-        inches = 0.0
-        if rest:
-            rest = rest.replace("in", "").replace('"', "").strip()
-            if rest:
-                inches = float(rest)
-        return feet * 12.0 + inches
-
-    # Multi-token unit parsing: e.g., "2500mm", "2.4m", "2m 30cm", "10ft 6in"
-    unit_re = re.compile(r'([+-]?\d+(?:\.\d+)?)\s*(mm|cm|ft|in|m)')
-    matches = list(unit_re.finditer(s))
-    if matches:
-        consumed = unit_re.sub("", s)
-        consumed = consumed.replace(",", " ").strip()
-        if consumed:
-            raise ValueError(f"Could not parse length: {raw}")
-        total_inches = 0.0
-        for m in matches:
-            value = float(m.group(1))
-            unit = m.group(2)
-            total_inches += _unit_value_to_inches(value, unit)
-        return total_inches
-
-    # Bare number defaults to selected default unit.
-    value = float(s)
-    unit = (default_unit or "in").strip().lower()
-    if unit not in UNIT_CHOICES:
-        unit = "in"
-    return _unit_value_to_inches(value, unit)
 
 
 def format_inches(value_in: float) -> str:

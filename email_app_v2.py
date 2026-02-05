@@ -1743,6 +1743,17 @@ class EmailApp:
 
 
 def main():
+    allow_legacy = (os.environ.get("GENIMAIL_ALLOW_LEGACY_TK", "") or "").strip().lower()
+    if allow_legacy not in {"1", "true", "yes"}:
+        print("[LEGACY] email_app_v2 is deprecated. Launching PySide6 app instead...")
+        try:
+            from email_app_qt import main as qt_main
+        except Exception as exc:
+            print(f"[LEGACY] Could not launch Qt app: {exc}")
+            print("Install dependencies with: pip install -r requirements.txt")
+            return 1
+        return qt_main()
+
     com_status = ensure_sta_apartment()
     if not com_status.ready:
         print(f"[COM] {com_status.detail}")
@@ -1761,8 +1772,9 @@ def main():
 
     SplashScreen(root, on_complete=on_splash_done)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 
