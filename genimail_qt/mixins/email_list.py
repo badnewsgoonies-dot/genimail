@@ -117,10 +117,19 @@ class EmailListMixin:
         self.filtered_messages = []
         self.message_list.clear()
         self._clear_detail_view(f'Loading messages for "{query_key}"...')
+
+        def _on_result(payload):
+            self.company_query_inflight.discard(query_key)
+            self._on_company_messages_loaded(payload)
+
+        def _on_error(trace_text):
+            self.company_query_inflight.discard(query_key)
+            self._on_company_messages_error(query_key, trace_text)
+
         self.workers.submit(
             lambda q=query_key: self._company_messages_worker(q),
-            self._on_company_messages_loaded,
-            lambda trace_text, q=query_key: self._on_company_messages_error(q, trace_text),
+            _on_result,
+            _on_error,
         )
 
     def _company_messages_worker(self, company_query):
@@ -172,7 +181,6 @@ class EmailListMixin:
 
     def _on_company_messages_loaded(self, payload):
         query = (payload.get("query") or "").strip().lower()
-        self.company_query_inflight.discard(query)
         self.company_query_cache[query] = {
             "messages": list(payload.get("messages") or []),
             "errors": list(payload.get("errors") or []),
@@ -195,7 +203,6 @@ class EmailListMixin:
             self._set_status(f'Loaded {len(self.filtered_messages)} message(s) for "{query}" across folders.')
 
     def _on_company_messages_error(self, query, trace_text):
-        self.company_query_inflight.discard((query or "").strip().lower())
         if (query or "").strip().lower() != (self.company_filter_domain or "").strip().lower():
             return
         self._set_status(f'Unable to refresh "{query}" right now.')

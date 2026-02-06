@@ -171,6 +171,75 @@ def test_messages_worker_falls_back_to_local_filter_when_graph_search_fails():
     assert [msg["id"] for msg in payload["messages"]] == ["1"]
 
 
+def test_company_inflight_key_cleared_on_success_and_error():
+    """Inflight set is cleaned up by the wrapper callbacks so a stuck key cannot block reloads."""
+    from genimail_qt.mixins.email_list import EmailListMixin
+
+    class _FakeWorkers:
+        def __init__(self):
+            self.last_on_result = None
+            self.last_on_error = None
+
+        def submit(self, _fn, on_result, on_error=None):
+            self.last_on_result = on_result
+            self.last_on_error = on_error
+
+    class _Probe:
+        def __init__(self):
+            self.graph = object()
+            self.company_query_cache = {}
+            self.company_query_inflight = set()
+            self.company_result_messages = []
+            self.company_folder_filter = "all"
+            self.company_folder_sources = []
+            self.company_filter_domain = "acme.com"
+            self.current_folder_id = "inbox"
+            self.current_messages = []
+            self.filtered_messages = []
+            self.workers = _FakeWorkers()
+
+        def _show_message_list(self):
+            pass
+
+        class _List:
+            @staticmethod
+            def count():
+                return 0
+
+            @staticmethod
+            def clear():
+                pass
+
+        message_list = _List()
+
+        def _clear_detail_view(self, _msg=""):
+            pass
+
+        def _apply_company_folder_filter(self):
+            self.filtered_messages = list(self.company_result_messages)
+
+        def _set_status(self, _text):
+            pass
+
+    # -- success path --
+    probe = _Probe()
+    EmailListMixin._load_company_messages_all_folders(probe, "acme.com")
+    assert "acme.com" in probe.company_query_inflight
+
+    probe.workers.last_on_result({
+        "query": "acme.com", "messages": [], "errors": [], "fetched_at": time.time(),
+    })
+    assert "acme.com" not in probe.company_query_inflight
+
+    # -- error path --
+    probe2 = _Probe()
+    EmailListMixin._load_company_messages_all_folders(probe2, "acme.com")
+    assert "acme.com" in probe2.company_query_inflight
+
+    probe2.workers.last_on_error("Traceback: boom")
+    assert "acme.com" not in probe2.company_query_inflight
+
+
 def test_on_messages_loaded_ignores_stale_payload_token():
     from genimail_qt.mixins.email_list import EmailListMixin
 
