@@ -6,7 +6,6 @@ from PySide6.QtWidgets import QMainWindow
 from genimail.constants import POLL_INTERVAL_MS, QT_THREAD_POOL_MAX_WORKERS
 from genimail.infra.cache_store import EmailCache
 from genimail.infra.config_store import Config
-from genimail_qt.cloud_pdf_cache import CloudPdfCache
 from genimail_qt.helpers import Toaster, WorkerManager
 from genimail_qt.mixins import (
     AuthPollMixin,
@@ -48,7 +47,6 @@ class GeniMailQtWindow(
         super().__init__()
         self.config = Config()
         self.cache = EmailCache()
-        self.cloud_pdf_cache = CloudPdfCache(self.cache, self.config.get)
         self.graph = None
         self.sync_service = None
         self.current_user_email = ""
@@ -58,8 +56,6 @@ class GeniMailQtWindow(
         self.current_message = None
         self.message_cache = {}
         self.attachment_cache = {}
-        self.cloud_link_cache = {}
-        self.cloud_pdf_downloads = {}
         self.known_ids = set()
         self.company_filter_domain = None
         self.company_domain_labels = {}

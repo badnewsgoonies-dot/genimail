@@ -242,18 +242,6 @@ def test_legacy_schema_v1_migrates_to_v3_without_data_loss(tmp_path):
             last_sync INTEGER
         );
 
-        CREATE TABLE cloud_pdf_cache (
-            url_key TEXT PRIMARY KEY,
-            url TEXT NOT NULL,
-            local_path TEXT NOT NULL,
-            file_name TEXT,
-            size_bytes INTEGER DEFAULT 0,
-            content_type TEXT,
-            source TEXT,
-            content_hash TEXT,
-            fetched_at INTEGER NOT NULL,
-            last_accessed_at INTEGER NOT NULL
-        );
         """
     )
     conn.execute(

@@ -15,6 +15,7 @@ except Exception:
     QPdfView = None
     HAS_QTPDF = False
 
+from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
 from genimail_qt.webview_page import FilteredWebEnginePage
 
@@ -142,21 +143,16 @@ class PdfMixin:
         directory = download.downloadDirectory() or ""
         filename = download.downloadFileName() or ""
         path = os.path.join(directory, filename) if directory and filename else ""
-        message_id = download.property("message_id")
-        if path and message_id:
-            downloads = self.cloud_pdf_downloads.get(message_id, [])
-            existing_paths = {entry.get("path") for entry in downloads if entry.get("path")}
-            if path not in existing_paths:
-                downloads.append({"path": path, "from_cache": False})
-                self.cloud_pdf_downloads[message_id] = downloads
-            if (self.current_message or {}).get("id") == message_id:
-                self._update_cloud_download_list(message_id)
         if path:
             self._set_status(f"Downloaded {os.path.basename(path)}")
             self.toaster.show(
                 f"Download complete · {os.path.basename(path)}",
                 kind="success",
-                action=lambda p=path: self._open_download_path(p),
+                action=lambda p=path: (
+                    self._open_pdf_file(p, activate=True)
+                    if p.lower().endswith(".pdf")
+                    else open_document_file(p)
+                ),
             )
 
     def _find_pdf_tab_index(self, path):

@@ -3,11 +3,10 @@ import sqlite3
 import threading
 import time
 
-from genimail.infra.cloud_pdf_store import CloudPdfStoreMixin
 from genimail.paths import CACHE_DB_FILE
 
 
-class EmailCache(CloudPdfStoreMixin):
+class EmailCache:
     """SQLite-based persistent cache for emails with thread-safe connections."""
 
     SCHEMA_VERSION = 3
@@ -75,26 +74,11 @@ class EmailCache(CloudPdfStoreMixin):
                 last_sync INTEGER
             );
 
-            CREATE TABLE IF NOT EXISTS cloud_pdf_cache (
-                url_key TEXT PRIMARY KEY,
-                url TEXT NOT NULL,
-                local_path TEXT NOT NULL,
-                file_name TEXT,
-                size_bytes INTEGER DEFAULT 0,
-                content_type TEXT,
-                source TEXT,
-                content_hash TEXT,
-                fetched_at INTEGER NOT NULL,
-                last_accessed_at INTEGER NOT NULL
-            );
-
             CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id, received_datetime DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_cached ON messages(cached_at);
             CREATE INDEX IF NOT EXISTS idx_messages_company ON messages(company_label);
             CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_address);
             CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
-            CREATE INDEX IF NOT EXISTS idx_cloud_cache_access ON cloud_pdf_cache(last_accessed_at);
-            CREATE INDEX IF NOT EXISTS idx_cloud_cache_fetched ON cloud_pdf_cache(fetched_at);
         """
         )
         current_version = self._current_schema_version(conn)
@@ -621,7 +605,6 @@ class EmailCache(CloudPdfStoreMixin):
         if self._is_fts_enabled(conn):
             conn.execute("DELETE FROM message_search_fts")
         conn.execute("DELETE FROM sync_state")
-        conn.execute("DELETE FROM cloud_pdf_cache")
         conn.commit()
 
     def search_by_domain(self, domain):
