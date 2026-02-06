@@ -9,6 +9,21 @@ from genimail.services.mail_sync import MailSyncService, collect_new_unread
 
 
 class AuthPollMixin:
+    def _resolve_inbox_id(self):
+        """Return the actual Graph API folder ID for Inbox.
+
+        After ``_populate_folders`` runs, ``company_folder_sources`` contains
+        an entry with ``key="inbox"`` whose ``id`` is the real Graph API ID
+        (e.g. ``"AAMkAD..."``) .  Before that list is populated we fall back
+        to the well-known name ``"inbox"`` which the Graph API also accepts.
+        """
+        for source in self.company_folder_sources or []:
+            if (source or {}).get("key") == "inbox":
+                real_id = (source.get("id") or "").strip()
+                if real_id:
+                    return real_id
+        return "inbox"
+
     def _collect_sync_folder_ids(self):
         ordered = []
         seen = set()
@@ -23,7 +38,7 @@ class AuthPollMixin:
             seen.add(key)
             ordered.append(value)
 
-        add("inbox")
+        add(self._resolve_inbox_id())
         for source in self.company_folder_sources or []:
             add((source or {}).get("id") or (source or {}).get("key"))
         add(self.current_folder_id)
@@ -120,7 +135,7 @@ class AuthPollMixin:
     def _init_delta_token_worker(self):
         return self.sync_service.initialize_delta_tokens(
             folder_ids=self._collect_sync_folder_ids(),
-            primary_folder_id="inbox",
+            primary_folder_id=self._resolve_inbox_id(),
         )
 
     def _on_delta_token_ready(self, payload):
@@ -155,7 +170,7 @@ class AuthPollMixin:
         return self.sync_service.sync_delta_for_folders(
             folder_ids=self._collect_sync_folder_ids(),
             fallback_top=EMAIL_DELTA_FALLBACK_TOP,
-            primary_folder_id="inbox",
+            primary_folder_id=self._resolve_inbox_id(),
         )
 
     def _on_poll_result(self, payload):
@@ -186,13 +201,8 @@ class AuthPollMixin:
             return
 
         # Resolve which folder's updates to apply to the active message list.
-        active_folder_key = (self.current_folder_id or "").strip().lower()
-        if hasattr(self, "_folder_key_for_id"):
-            active_folder_key = (self._folder_key_for_id(self.current_folder_id) or active_folder_key).strip().lower()
-
-        folder_sync_key = "inbox" if active_folder_key == "inbox" else self.current_folder_id
-        active_updates = updates_by_folder.get(folder_sync_key, [])
-        active_deletes = deleted_by_folder.get(folder_sync_key, [])
+        active_updates = updates_by_folder.get(self.current_folder_id, [])
+        active_deletes = deleted_by_folder.get(self.current_folder_id, [])
 
         if active_deletes:
             deleted_set = set(active_deletes)
@@ -223,6 +233,21 @@ class AuthPollMixin:
             self._set_status(f"{len(new_unread)} new unread message(s)")
         else:
             self._set_status("Connected. Sync up to date.")
+
+        self._prune_known_ids()
+
+    def _prune_known_ids(self, max_size=5000):
+        """Prevent known_ids from growing without bound.
+
+        Once the set exceeds *max_size*, trim it back to just the IDs that
+        are currently visible in ``current_messages``.  This keeps
+        ``collect_new_unread`` accurate for the active view while releasing
+        memory from messages that scrolled out of scope long ago.
+        """
+        if len(self.known_ids) <= max_size:
+            return
+        active_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
+        self.known_ids = active_ids
 
     def _on_poll_error(self, trace_text):
         self._poll_in_flight = False
