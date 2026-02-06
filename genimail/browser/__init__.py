@@ -1,6 +1,5 @@
 """Browser subsystem for embedded and managed web surfaces."""
 
-from genimail.browser.downloads import DownloadResult, download_url_content, require_pdf_bytes
 from genimail.browser.errors import (
     BrowserDownloadError,
     BrowserFeatureUnavailableError,
@@ -22,8 +21,5 @@ __all__ = [
     "BrowserRuntimeError",
     "BrowserRuntimeInfo",
     "BrowserRuntimeStatus",
-    "DownloadResult",
     "detect_browser_runtime",
-    "download_url_content",
-    "require_pdf_bytes",
 ]

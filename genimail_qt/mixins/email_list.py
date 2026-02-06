@@ -2,12 +2,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton
 
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
-from genimail.constants import (
-    CLOUD_PDF_SOURCE_SUMMARY_MAX,
-    EMAIL_LIST_FETCH_TOP,
-)
+from genimail.constants import EMAIL_LIST_FETCH_TOP
 from genimail.domain.helpers import format_date, format_size, strip_html
-from genimail.domain.link_tools import collect_cloud_pdf_links
 from genimail_qt.constants import ATTACHMENT_THUMBNAIL_MAX_INITIAL, ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS
 from genimail_qt.webview_utils import (
     is_inline_attachment,
@@ -212,7 +208,6 @@ class EmailListMixin:
             self._render_message_detail(
                 self.message_cache[message_id],
                 self.attachment_cache.get(message_id, []),
-                self.cloud_link_cache.get(message_id, []),
             )
             return
         self.workers.submit(
@@ -269,26 +264,22 @@ class EmailListMixin:
         body = detail.get("body", {})
         content_type = (body.get("contentType") or "").lower()
         content = body.get("content") or ""
-        plain_text = strip_html(content) if content_type == "html" else (content or detail.get("bodyPreview", ""))
-        cloud_links = collect_cloud_pdf_links(content if content_type == "html" else "", plain_text)
         self.cache.save_message_body(message_id, body.get("contentType", ""), body.get("content", ""))
         self.cache.save_attachments(message_id, attachments)
-        return {"id": message_id, "detail": detail, "attachments": attachments, "cloud_links": cloud_links}
+        return {"id": message_id, "detail": detail, "attachments": attachments}
 
     def _on_message_detail_loaded(self, payload):
         message_id = payload.get("id")
         detail = payload.get("detail") or {}
         attachments = payload.get("attachments") or []
-        cloud_links = payload.get("cloud_links") or []
         if message_id:
             self.message_cache[message_id] = detail
             self.attachment_cache[message_id] = attachments
-            self.cloud_link_cache[message_id] = cloud_links
         if message_id and message_id != (self.current_message or {}).get("id"):
             return
-        self._render_message_detail(detail, attachments, cloud_links)
+        self._render_message_detail(detail, attachments)
 
-    def _render_message_detail(self, detail, attachments, cloud_links=None):
+    def _render_message_detail(self, detail, attachments):
         sender = detail.get("from", {}).get("emailAddress", {}).get("name") or "Unknown"
         address = detail.get("from", {}).get("emailAddress", {}).get("address") or ""
         received = format_date(detail.get("receivedDateTime", ""))
@@ -325,19 +316,6 @@ class EmailListMixin:
         if self.attachment_list.count() > 0:
             self.attachment_list.setCurrentRow(0)
         self._render_attachment_thumbnails(visible_attachments)
-
-        cloud_links = cloud_links or []
-        self.open_cloud_links_btn.setEnabled(bool(cloud_links))
-        if cloud_links:
-            sources = sorted({link.get("source", "External") for link in cloud_links})
-            summary = ", ".join(sources[:CLOUD_PDF_SOURCE_SUMMARY_MAX]) + (
-                "..." if len(sources) > CLOUD_PDF_SOURCE_SUMMARY_MAX else ""
-            )
-            self.cloud_links_info.setText(f"{len(cloud_links)} linked cloud file(s) detected · {summary}")
-        else:
-            self.cloud_links_info.setText("No linked cloud files found")
-        detail_id = detail.get("id") or (self.current_message or {}).get("id")
-        self._update_cloud_download_list(detail_id)
 
     # ------------------------------------------------------------------
     # Attachment thumbnails
@@ -427,11 +405,6 @@ class EmailListMixin:
         self.message_header.setText(header_text)
         self.email_preview.setHtml(f"<html><body style='font-family:Segoe UI;'>{message}</body></html>")
         self.attachment_list.clear()
-        self.cloud_download_list.clear()
-        self.cloud_download_label.hide()
-        self._update_cloud_download_buttons()
-        self.open_cloud_links_btn.setEnabled(False)
-        self.cloud_links_info.setText("No linked cloud files found")
         self._render_attachment_thumbnails([])
 
 

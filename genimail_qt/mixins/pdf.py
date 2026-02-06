@@ -142,15 +142,6 @@ class PdfMixin:
         directory = download.downloadDirectory() or ""
         filename = download.downloadFileName() or ""
         path = os.path.join(directory, filename) if directory and filename else ""
-        message_id = download.property("message_id")
-        if path and message_id:
-            downloads = self.cloud_pdf_downloads.get(message_id, [])
-            existing_paths = {entry.get("path") for entry in downloads if entry.get("path")}
-            if path not in existing_paths:
-                downloads.append({"path": path, "from_cache": False})
-                self.cloud_pdf_downloads[message_id] = downloads
-            if (self.current_message or {}).get("id") == message_id:
-                self._update_cloud_download_list(message_id)
         if path:
             self._set_status(f"Downloaded {os.path.basename(path)}")
             self.toaster.show(

@@ -76,7 +76,6 @@ class AuthPollMixin:
         self.filtered_messages = []
         self.message_cache.clear()
         self.attachment_cache.clear()
-        self.cloud_link_cache.clear()
         self.known_ids.clear()
         self._reset_company_state(clear_cache=True)
         self.current_message = None
@@ -124,10 +123,6 @@ class AuthPollMixin:
     def _start_polling(self):
         if not self.sync_service:
             return
-        try:
-            self.cloud_pdf_cache.prune()
-        except Exception as exc:
-            print(f"[CLOUD-CACHE] prune error: {exc}")
         self._set_status("Connected. Sync active.")
         self.workers.submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_poll_error)
         self._poll_timer.start()
@@ -210,7 +205,6 @@ class AuthPollMixin:
             for msg_id in deleted_set:
                 self.message_cache.pop(msg_id, None)
                 self.attachment_cache.pop(msg_id, None)
-                self.cloud_link_cache.pop(msg_id, None)
 
         if active_updates or active_deletes:
             index_by_id = {msg.get("id"): idx for idx, msg in enumerate(self.current_messages) if msg.get("id")}
