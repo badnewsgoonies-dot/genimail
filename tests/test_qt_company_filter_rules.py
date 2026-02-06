@@ -37,16 +37,48 @@ def test_message_matches_company_filter_rules():
 
 def test_load_company_queries_supports_legacy_dict_and_new_list():
     fake_dict = _FakeWindow({"companies": {"airmiles": "airmiles", "airmiles.ca": "airmiles.ca"}})
-    assert GeniMailQtWindow._load_company_queries(fake_dict) == ["airmiles", "airmiles.ca"]
+    assert GeniMailQtWindow._load_company_queries(fake_dict) == [
+        {"domain": "airmiles", "label": ""},
+        {"domain": "airmiles.ca", "label": ""},
+    ]
 
     fake_list = _FakeWindow({"companies": [" airmiles ", "airmiles.ca", "airmiles"]})
-    assert GeniMailQtWindow._load_company_queries(fake_list) == ["airmiles", "airmiles.ca"]
+    assert GeniMailQtWindow._load_company_queries(fake_list) == [
+        {"domain": "airmiles", "label": ""},
+        {"domain": "airmiles.ca", "label": ""},
+    ]
 
 
-def test_save_company_queries_persists_list():
+def test_load_company_queries_reads_new_dict_list_format():
+    fake = _FakeWindow(
+        {
+            "companies": [
+                {"domain": "acme.com", "label": "Acme Corp"},
+                {"domain": " test.org ", "label": ""},
+                {"domain": "acme.com", "label": "Duplicate"},
+            ]
+        }
+    )
+    assert GeniMailQtWindow._load_company_queries(fake) == [
+        {"domain": "acme.com", "label": "Acme Corp"},
+        {"domain": "test.org", "label": ""},
+    ]
+
+
+def test_save_company_queries_persists_dict_list():
     fake = _FakeWindow({})
-    GeniMailQtWindow._save_company_queries(fake, ["airmiles", "airmiles.ca", "airmiles"])
-    assert fake.config.payload["companies"] == ["airmiles", "airmiles.ca"]
+    GeniMailQtWindow._save_company_queries(
+        fake,
+        [
+            {"domain": "airmiles", "label": "Air Miles"},
+            {"domain": "airmiles.ca", "label": ""},
+            {"domain": "airmiles", "label": "Duplicate"},
+        ],
+    )
+    assert fake.config.payload["companies"] == [
+        {"domain": "airmiles", "label": "Air Miles"},
+        {"domain": "airmiles.ca", "label": ""},
+    ]
 
 
 def test_folder_key_from_folder_prefers_well_known_name():
@@ -97,24 +129,40 @@ def test_open_company_manager_clears_with_reload_when_active_tab_removed(monkeyp
     from genimail_qt.mixins import company as company_module
 
     class _Dialog:
-        def __init__(self, _parent, _existing_queries):
+        received_domains = []
+
+        def __init__(self, _parent, _existing_entries, all_domains=None):
             self.changed = True
-            self.tabs = ["other.com"]
+            self.entries = [{"domain": "other.com", "label": "Other"}]
+            _Dialog.received_domains = list(all_domains or [])
 
         def exec(self):
             return 0
+
+    class _Cache:
+        @staticmethod
+        def get_all_domains():
+            return [{"domain": "acme.com"}, {"domain": "other.com"}]
 
     class _Probe:
         def __init__(self):
             self.company_filter_domain = "acme.com"
             self.cleared = []
-            self.saved_tabs = []
+            self.saved_entries = []
+            self.cache = _Cache()
+
+        @staticmethod
+        def _normalize_company_query(value):
+            return company_module.CompanyMixin._normalize_company_query(value)
 
         def _load_company_queries(self):
-            return ["acme.com", "other.com"]
+            return [
+                {"domain": "acme.com", "label": ""},
+                {"domain": "other.com", "label": ""},
+            ]
 
-        def _save_company_queries(self, tabs):
-            self.saved_tabs = list(tabs)
+        def _save_company_queries(self, entries):
+            self.saved_entries = list(entries)
 
         def _refresh_company_sidebar(self):
             self.company_filter_domain = None
@@ -127,7 +175,8 @@ def test_open_company_manager_clears_with_reload_when_active_tab_removed(monkeyp
 
     company_module.CompanyMixin._open_company_manager(probe)
 
-    assert probe.saved_tabs == ["other.com"]
+    assert probe.saved_entries == [{"domain": "other.com", "label": "Other"}]
+    assert _Dialog.received_domains == ["acme.com", "other.com"]
     assert probe.cleared == [True]
 
 
@@ -226,3 +275,160 @@ def test_on_messages_loaded_ignores_stale_payload_token():
     assert probe.current_messages == ["stale"]
     assert probe.refresh_calls == 0
     assert probe.render_calls == 0
+
+
+def test_company_load_token_prevents_stale_results():
+    from genimail_qt.mixins.email_list import EmailListMixin
+
+    class _Probe:
+        def __init__(self):
+            self._company_load_token = 2
+            self.company_filter_domain = "acme.com"
+            self.company_query_inflight = {"acme.com"}
+            self.company_query_cache = {}
+            self.company_result_messages = ["stale"]
+            self.company_folder_filter = "all"
+            self.filtered_messages = []
+            self.apply_calls = 0
+
+        def _apply_company_folder_filter(self):
+            self.apply_calls += 1
+
+        @staticmethod
+        def _set_status(_text):
+            pass
+
+    probe = _Probe()
+    payload = {
+        "token": 1,
+        "query": "acme.com",
+        "messages": [{"id": "fresh"}],
+        "errors": [],
+        "fetched_at": time.time(),
+    }
+
+    EmailListMixin._on_company_messages_loaded(probe, payload)
+
+    assert probe.company_query_cache["acme.com"]["messages"] == [{"id": "fresh"}]
+    assert probe.apply_calls == 0
+    assert probe.company_result_messages == ["stale"]
+
+
+def test_reset_company_state_clears_all_fields():
+    from genimail_qt.mixins.company import CompanyMixin
+
+    class _Probe:
+        def __init__(self):
+            self.company_filter_domain = "acme.com"
+            self.company_result_messages = [{"id": "1"}]
+            self.company_folder_filter = "sentitems"
+            self.company_query_cache = {"acme.com": {"messages": []}}
+            self.company_query_inflight = {"acme.com"}
+            self._company_search_override = {"query": "acme.com"}
+            self.tab_sync_calls = 0
+            self.folder_sync_calls = 0
+            self.visible_states = []
+            self.badge_updates = 0
+
+        def _sync_company_tab_checks(self):
+            self.tab_sync_calls += 1
+
+        def _sync_company_folder_filter_checks(self):
+            self.folder_sync_calls += 1
+
+        def _set_company_folder_filter_visible(self, visible):
+            self.visible_states.append(bool(visible))
+
+        def _update_company_filter_badge(self):
+            self.badge_updates += 1
+
+    probe = _Probe()
+    CompanyMixin._reset_company_state(probe, clear_cache=True)
+
+    assert probe.company_filter_domain is None
+    assert probe.company_result_messages == []
+    assert probe.company_folder_filter == "all"
+    assert probe.company_query_cache == {}
+    assert probe.company_query_inflight == set()
+    assert probe._company_search_override is None
+    assert probe.tab_sync_calls == 1
+    assert probe.folder_sync_calls == 1
+    assert probe.visible_states == [False]
+    assert probe.badge_updates == 1
+
+
+def test_company_search_falls_back_to_local_on_failure():
+    from genimail_qt.mixins.email_list import EmailListMixin
+
+    class _SearchInput:
+        @staticmethod
+        def text():
+            return "invoice"
+
+    class _Workers:
+        @staticmethod
+        def submit(_fn, _on_result, on_error):
+            on_error("search failed")
+
+    class _Probe:
+        def __init__(self):
+            self.graph = object()
+            self.search_input = _SearchInput()
+            self.workers = _Workers()
+            self.company_filter_domain = "acme.com"
+            self.company_result_messages = [
+                {
+                    "id": "1",
+                    "subject": "Invoice due",
+                    "bodyPreview": "Please pay",
+                    "from": {"emailAddress": {"name": "Acme Billing", "address": "billing@acme.com"}},
+                },
+                {
+                    "id": "2",
+                    "subject": "Weekly status",
+                    "bodyPreview": "No invoice",
+                    "from": {"emailAddress": {"name": "Acme Ops", "address": "ops@acme.com"}},
+                },
+            ]
+            self.company_folder_filter = "all"
+            self.filtered_messages = []
+            self.current_messages = []
+            self._company_load_token = 0
+            self._company_search_override = {"query": "acme.com", "search_text": "invoice", "messages": [{"id": "stale"}]}
+            self.apply_calls = 0
+            self.status = ""
+
+        @staticmethod
+        def _show_message_list():
+            pass
+
+        def _set_status(self, text):
+            self.status = text
+
+        @staticmethod
+        def _on_company_search_loaded(_payload):
+            pass
+
+        def _on_company_search_error(self, query, search_text, token, trace_text):
+            EmailListMixin._on_company_search_error(self, query, search_text, token, trace_text)
+
+        @staticmethod
+        def _message_matches_search(msg, text):
+            return EmailListMixin._message_matches_search(msg, text)
+
+        def _apply_company_folder_filter(self):
+            self.apply_calls += 1
+            search_text = (self.search_input.text() or "").strip().lower()
+            source = list(self.company_result_messages)
+            if search_text:
+                source = [msg for msg in source if self._message_matches_search(msg, search_text)]
+            self.current_messages = source
+            self.filtered_messages = source
+
+    probe = _Probe()
+    EmailListMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
+
+    assert probe.apply_calls == 1
+    assert [msg["id"] for msg in probe.filtered_messages] == ["1", "2"]
+    assert probe._company_search_override is None
+    assert "locally filtered" in probe.status.lower()

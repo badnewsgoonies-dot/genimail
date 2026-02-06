@@ -43,11 +43,7 @@ class AuthPollMixin:
         self.attachment_cache.clear()
         self.cloud_link_cache.clear()
         self.known_ids.clear()
-        self.company_result_messages = []
-        self.company_query_cache.clear()
-        self.company_query_inflight.clear()
-        self.company_folder_filter = "all"
-        self.company_filter_domain = None
+        self._reset_company_state(clear_cache=True)
         self.current_message = None
         self.message_list.clear()
         self._show_message_list()

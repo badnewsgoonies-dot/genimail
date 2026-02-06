@@ -66,6 +66,7 @@ class GeniMailQtWindow(
         self.company_folder_sources = []
         self.company_query_cache = {}
         self.company_query_inflight = set()
+        self._company_load_token = 0
         self._web_page_sources = {}
         self._download_profile_ids = set()
         self._poll_in_flight = False

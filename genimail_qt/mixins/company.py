@@ -16,6 +16,19 @@ class CompanyMixin:
         "colorx": "color x",
     }
 
+    def _reset_company_state(self, clear_cache=False):
+        self.company_filter_domain = None
+        self.company_result_messages = []
+        self.company_folder_filter = "all"
+        self._company_search_override = None
+        if clear_cache:
+            self.company_query_cache.clear()
+            self.company_query_inflight.clear()
+        self._sync_company_tab_checks()
+        self._sync_company_folder_filter_checks()
+        self._set_company_folder_filter_visible(False)
+        self._update_company_filter_badge()
+
     @staticmethod
     def _normalize_folder_key(name):
         return "".join(ch for ch in (name or "").strip().lower() if ch.isalnum())
@@ -122,13 +135,7 @@ class CompanyMixin:
             btn.blockSignals(False)
 
         if self.company_filter_domain:
-            self.company_filter_domain = None
-            self.company_result_messages = []
-            self.company_folder_filter = "all"
-            self._sync_company_tab_checks()
-            self._sync_company_folder_filter_checks()
-            self._set_company_folder_filter_visible(False)
-            self._update_company_filter_badge()
+            self._reset_company_state()
 
         self._show_message_list()
         self._clear_detail_view()
@@ -137,16 +144,20 @@ class CompanyMixin:
 
     def _refresh_company_sidebar(self):
         self.company_domain_labels = {}
-        queries = self._load_company_queries()
+        entries = self._load_company_queries()
         self.company_entries_visible = []
-        for query in queries:
-            self.company_domain_labels[query] = query
-            self.company_entries_visible.append({"domain": query, "label": query})
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            domain = self._normalize_company_query(entry.get("domain", ""))
+            if not domain:
+                continue
+            label = (entry.get("label") or "").strip() or domain
+            self.company_domain_labels[domain] = label
+            self.company_entries_visible.append({"domain": domain, "label": label})
 
         if self.company_filter_domain and self.company_filter_domain not in {entry["domain"] for entry in self.company_entries_visible}:
-            self.company_filter_domain = None
-            self.company_result_messages = []
-            self.company_folder_filter = "all"
+            self._reset_company_state()
 
         self._rebuild_company_tabs()
         self._rebuild_company_folder_filter_chips()
@@ -246,13 +257,7 @@ class CompanyMixin:
             domain = None
 
         if not domain:
-            self.company_filter_domain = None
-            self.company_result_messages = []
-            self.company_folder_filter = "all"
-            self._sync_company_tab_checks()
-            self._sync_company_folder_filter_checks()
-            self._set_company_folder_filter_visible(False)
-            self._update_company_filter_badge()
+            self._reset_company_state()
             self._load_messages()
             return
 
@@ -278,12 +283,18 @@ class CompanyMixin:
                 self.clear_company_filter_btn.hide()
             return
 
+        display_label = (self.company_domain_labels.get(query) or "").strip()
+        if display_label and display_label.lower() != query:
+            company_text = f"{display_label} ({query})"
+        else:
+            company_text = query
+
         folder_key = (self.company_folder_filter or "all").strip().lower() or "all"
         folder_label = self.FOLDER_LABELS.get(folder_key, folder_key)
         if folder_key == "all":
-            self.company_filter_badge.setText(f'Company: "{query}" · Folder: All')
+            self.company_filter_badge.setText(f"Company: {company_text} · Folder: All")
         else:
-            self.company_filter_badge.setText(f'Company: "{query}" · Folder: {folder_label}')
+            self.company_filter_badge.setText(f"Company: {company_text} · Folder: {folder_label}")
         self.company_filter_badge.show()
         if hasattr(self, "clear_company_filter_btn"):
             self.clear_company_filter_btn.show()
@@ -292,26 +303,34 @@ class CompanyMixin:
         had_filter = bool(self.company_filter_domain)
         if not had_filter and not force_reload:
             return
-        self.company_filter_domain = None
-        self.company_result_messages = []
-        self.company_folder_filter = "all"
-        self._sync_company_tab_checks()
-        self._sync_company_folder_filter_checks()
-        self._set_company_folder_filter_visible(False)
-        self._update_company_filter_badge()
+        self._reset_company_state()
         self._load_messages()
 
     def _open_company_manager(self):
-        existing_queries = self._load_company_queries()
-        dialog = CompanyTabManagerDialog(self, existing_queries)
+        existing_entries = self._load_company_queries()
+        all_domains = []
+        if hasattr(self, "cache") and hasattr(self.cache, "get_all_domains"):
+            try:
+                for item in self.cache.get_all_domains() or []:
+                    if isinstance(item, dict):
+                        domain = self._normalize_company_query(item.get("domain", ""))
+                    else:
+                        domain = self._normalize_company_query(item)
+                    if domain and domain not in all_domains:
+                        all_domains.append(domain)
+            except Exception:
+                all_domains = []
+
+        dialog = CompanyTabManagerDialog(self, existing_entries, all_domains=all_domains)
         dialog.exec()
         if not dialog.changed:
             return
 
         previous_active = (self.company_filter_domain or "").strip().lower() or None
-        self._save_company_queries(dialog.tabs)
+        self._save_company_queries(dialog.entries)
         self._refresh_company_sidebar()
-        if previous_active and previous_active in dialog.tabs:
+        visible_domains = {entry.get("domain") for entry in dialog.entries if isinstance(entry, dict)}
+        if previous_active and previous_active in visible_domains:
             self.company_filter_domain = previous_active
             self._sync_company_tab_checks()
             self._set_company_folder_filter_visible(True)
@@ -319,7 +338,7 @@ class CompanyMixin:
             if not self.company_result_messages:
                 self._load_company_messages_all_folders(previous_active)
             return
-        if previous_active and previous_active not in dialog.tabs:
+        if previous_active and previous_active not in visible_domains:
             self._clear_company_filter(force_reload=True)
 
     @staticmethod
@@ -328,25 +347,43 @@ class CompanyMixin:
 
     def _load_company_queries(self):
         raw = self.config.get("companies", {}) or {}
-        if isinstance(raw, dict):
-            values = list(raw.keys())
-        elif isinstance(raw, list):
-            values = raw
-        else:
-            values = []
-        queries = []
-        for value in values:
-            normalized = CompanyMixin._normalize_company_query(value)
-            if normalized and normalized not in queries:
-                queries.append(normalized)
-        return queries
+        entries = []
+        seen_domains = set()
+
+        def add_entry(domain, label=""):
+            normalized = CompanyMixin._normalize_company_query(domain)
+            if not normalized or normalized in seen_domains:
+                return
+            seen_domains.add(normalized)
+            entries.append({"domain": normalized, "label": (label or "").strip()})
+
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, str):
+                    add_entry(item, "")
+                    continue
+                if isinstance(item, dict):
+                    add_entry(item.get("domain", ""), item.get("label", ""))
+        elif isinstance(raw, dict):
+            for key in raw.keys():
+                add_entry(key, "")
+
+        return entries
 
     def _save_company_queries(self, queries):
         normalized = []
-        for value in queries:
-            item = CompanyMixin._normalize_company_query(value)
-            if item and item not in normalized:
-                normalized.append(item)
+        seen_domains = set()
+        for value in queries or []:
+            if isinstance(value, dict):
+                domain = CompanyMixin._normalize_company_query(value.get("domain", ""))
+                label = (value.get("label") or "").strip()
+            else:
+                domain = CompanyMixin._normalize_company_query(value)
+                label = ""
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            normalized.append({"domain": domain, "label": label})
         self.config.set("companies", normalized)
 
     def _get_company_domain_set(self, key):

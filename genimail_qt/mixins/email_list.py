@@ -27,12 +27,16 @@ class EmailListMixin:
             return
 
         if self.company_filter_domain:
-            # In company mode, search narrows the already retrieved cross-folder set.
-            self._apply_company_folder_filter()
+            search_text = self.search_input.text().strip() or None
+            if search_text:
+                self._load_company_messages_with_search(self.company_filter_domain, search_text)
+            else:
+                self._apply_company_folder_filter()
             return
 
         search_text = self.search_input.text().strip() or None
         folder_id = self.current_folder_id
+        self._company_search_override = None
         self._message_load_token = getattr(self, "_message_load_token", 0) + 1
         load_token = self._message_load_token
         self._show_message_list()
@@ -71,6 +75,7 @@ class EmailListMixin:
 
         folder_key = self._folder_key_for_id(folder_id)
         self.company_result_messages = []
+        self._company_search_override = None
         self.current_messages = [self._with_folder_meta(msg, folder_id, folder_key) for msg in messages]
         self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
         self._refresh_company_sidebar()
@@ -82,6 +87,7 @@ class EmailListMixin:
         else:
             self._show_message_list()
             self._clear_detail_view("No messages in this folder.")
+        self._ensure_detail_message_visible()
 
     def _load_company_messages_all_folders(self, company_query):
         if not self.graph:
@@ -90,6 +96,7 @@ class EmailListMixin:
         if not query_key:
             return
 
+        self._company_search_override = None
         cached = self.company_query_cache.get(query_key)
         now = time.time()
         if cached:
@@ -112,18 +119,21 @@ class EmailListMixin:
             return
 
         self.company_query_inflight.add(query_key)
-        self._show_message_list()
-        self.current_messages = []
-        self.filtered_messages = []
-        self.message_list.clear()
-        self._clear_detail_view(f'Loading messages for "{query_key}"...')
+        self._company_load_token = getattr(self, "_company_load_token", 0) + 1
+        load_token = self._company_load_token
+        if not cached:
+            self._show_message_list()
+            self.current_messages = []
+            self.filtered_messages = []
+            self.message_list.clear()
+            self._clear_detail_view(f'Loading messages for "{query_key}"...')
         self.workers.submit(
-            lambda q=query_key: self._company_messages_worker(q),
+            lambda q=query_key, token=load_token: self._company_messages_worker(q, token),
             self._on_company_messages_loaded,
             lambda trace_text, q=query_key: self._on_company_messages_error(q, trace_text),
         )
 
-    def _company_messages_worker(self, company_query):
+    def _company_messages_worker(self, company_query, token=None):
         deduped = {}
         errors = []
         sources = list(self.company_folder_sources or [])
@@ -168,7 +178,135 @@ class EmailListMixin:
                 errors.append(f"{folder_label}: {exc}")
 
         messages = sorted(deduped.values(), key=lambda msg: msg.get("receivedDateTime", ""), reverse=True)
-        return {"query": company_query, "messages": messages, "errors": errors, "fetched_at": time.time()}
+        return {"query": company_query, "messages": messages, "errors": errors, "fetched_at": time.time(), "token": token}
+
+    def _load_company_messages_with_search(self, company_query, search_text):
+        if not self.graph:
+            return
+        query_key = (company_query or "").strip().lower()
+        search_key = (search_text or "").strip().lower()
+        if not query_key:
+            return
+        if not search_key:
+            self._apply_company_folder_filter()
+            return
+
+        self._company_search_override = None
+        self._company_load_token = getattr(self, "_company_load_token", 0) + 1
+        load_token = self._company_load_token
+        self._show_message_list()
+        self._set_status(f'Searching "{search_key}" in "{query_key}"...')
+        self.workers.submit(
+            lambda q=query_key, text=search_key, token=load_token: self._company_search_worker(q, text, token),
+            self._on_company_search_loaded,
+            lambda trace_text, q=query_key, text=search_key, token=load_token: self._on_company_search_error(
+                q, text, token, trace_text
+            ),
+        )
+
+    def _company_search_worker(self, company_query, search_text, token):
+        deduped = {}
+        errors = []
+        sources = list(self.company_folder_sources or [])
+        if not sources:
+            sources = [{"id": self.current_folder_id, "key": self._folder_key_for_id(self.current_folder_id), "label": "Current"}]
+
+        combined_search = f"{company_query} {search_text}".strip()
+        for source in sources:
+            folder_id = source.get("id")
+            folder_key = source.get("key") or self._folder_key_for_id(folder_id)
+            folder_label = source.get("label") or folder_key
+            try:
+                page, _ = self.graph.get_messages(
+                    folder_id=folder_id,
+                    top=EMAIL_COMPANY_FETCH_PER_FOLDER,
+                    search=combined_search,
+                )
+            except Exception:
+                try:
+                    page, _ = self.graph.get_messages(
+                        folder_id=folder_id,
+                        top=EMAIL_COMPANY_FETCH_PER_FOLDER,
+                    )
+                except Exception as exc:
+                    errors.append(f"{folder_label}: {exc}")
+                    continue
+
+            try:
+                for msg in page or []:
+                    msg_with_folder = self._with_folder_meta(msg, folder_id, folder_key, folder_label)
+                    if not self._message_matches_company_filter(msg_with_folder, company_query):
+                        continue
+                    if not self._message_matches_search(msg_with_folder, search_text):
+                        continue
+                    msg_id = msg_with_folder.get("id")
+                    if not msg_id:
+                        continue
+                    existing = deduped.get(msg_id)
+                    if existing is None or msg_with_folder.get("receivedDateTime", "") > existing.get("receivedDateTime", ""):
+                        deduped[msg_id] = msg_with_folder
+            except Exception as exc:
+                errors.append(f"{folder_label}: {exc}")
+
+        messages = sorted(deduped.values(), key=lambda msg: msg.get("receivedDateTime", ""), reverse=True)
+        return {
+            "query": company_query,
+            "search_text": search_text,
+            "messages": messages,
+            "errors": errors,
+            "fetched_at": time.time(),
+            "token": token,
+        }
+
+    def _on_company_search_loaded(self, payload):
+        token = payload.get("token")
+        current_token = getattr(self, "_company_load_token", None)
+        if token is not None and current_token is not None and token != current_token:
+            return
+
+        query = (payload.get("query") or "").strip().lower()
+        if query != (self.company_filter_domain or "").strip().lower():
+            return
+
+        payload_search = (payload.get("search_text") or "").strip().lower()
+        current_search = (self.search_input.text() or "").strip().lower()
+        if not current_search:
+            self._company_search_override = None
+            self._apply_company_folder_filter()
+            return
+        if payload_search != current_search:
+            return
+
+        self._company_search_override = {
+            "query": query,
+            "search_text": payload_search,
+            "messages": list(payload.get("messages") or []),
+            "fetched_at": float(payload.get("fetched_at") or time.time()),
+        }
+        self._apply_company_folder_filter()
+        self._ensure_detail_message_visible()
+
+        errors = payload.get("errors") or []
+        if errors:
+            self._set_status(
+                f'Found {len(self.filtered_messages)} message(s) for "{query}" with partial folder search errors.'
+            )
+        else:
+            self._set_status(f'Found {len(self.filtered_messages)} message(s) for "{query}" matching "{payload_search}".')
+
+    def _on_company_search_error(self, query, search_text, token, trace_text):
+        current_token = getattr(self, "_company_load_token", None)
+        if token is not None and current_token is not None and token != current_token:
+            return
+        if (query or "").strip().lower() != (self.company_filter_domain or "").strip().lower():
+            return
+        if (search_text or "").strip().lower() != (self.search_input.text() or "").strip().lower():
+            return
+
+        self._company_search_override = None
+        self._apply_company_folder_filter()
+        self._set_status(f'Search unavailable right now. Showing locally filtered results for "{query}".')
+        print(trace_text)
 
     def _on_company_messages_loaded(self, payload):
         query = (payload.get("query") or "").strip().lower()
@@ -179,10 +317,16 @@ class EmailListMixin:
             "fetched_at": float(payload.get("fetched_at") or time.time()),
         }
 
+        token = payload.get("token")
+        current_token = getattr(self, "_company_load_token", None)
+        if token is not None and current_token is not None and token != current_token:
+            return
+
         if query != (self.company_filter_domain or "").strip().lower():
             return
 
         self.company_result_messages = payload.get("messages") or []
+        self._company_search_override = None
         self.company_folder_filter = self.company_folder_filter or "all"
         self._apply_company_folder_filter()
 
@@ -214,12 +358,22 @@ class EmailListMixin:
         return value, None
 
     def _apply_company_folder_filter(self):
+        search_text = (self.search_input.text() or "").strip().lower()
         source_messages = list(self.company_result_messages or [])
+        if search_text:
+            override = getattr(self, "_company_search_override", None) or {}
+            if (
+                (override.get("query") or "").strip().lower() == (self.company_filter_domain or "").strip().lower()
+                and (override.get("search_text") or "").strip().lower() == search_text
+            ):
+                source_messages = list(override.get("messages") or [])
+        else:
+            self._company_search_override = None
+
         folder_filter = (self.company_folder_filter or "all").strip().lower() or "all"
         if folder_filter != "all":
             source_messages = [msg for msg in source_messages if (msg.get("_folder_key") or "").strip().lower() == folder_filter]
 
-        search_text = (self.search_input.text() or "").strip().lower()
         if search_text:
             source_messages = [msg for msg in source_messages if self._message_matches_search(msg, search_text)]
 
@@ -232,6 +386,7 @@ class EmailListMixin:
         else:
             self._show_message_list()
             self._clear_detail_view("No messages match this company filter.")
+        self._ensure_detail_message_visible()
 
     @staticmethod
     def _message_matches_search(msg, search_text):
