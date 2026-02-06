@@ -104,6 +104,11 @@ class EmailListMixin:
             folder_id = self.current_folder_id
             messages = payload or []
 
+        # If user switched to company mode after this worker was submitted,
+        # discard the folder results to avoid stomping the company view.
+        if self.company_filter_domain:
+            return
+
         folder_key = self._folder_key_for_id(folder_id)
         self.company_result_messages = []
         self._company_search_override = None

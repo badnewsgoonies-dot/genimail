@@ -217,6 +217,7 @@ class AuthPollMixin:
             if self.message_list.count() == 0:
                 self._show_message_list()
                 self._clear_detail_view("No messages in this folder.")
+            self._ensure_detail_message_visible()
 
         if new_unread:
             self._set_status(f"{len(new_unread)} new unread message(s)")
