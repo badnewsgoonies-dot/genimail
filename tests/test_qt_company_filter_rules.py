@@ -103,7 +103,7 @@ def test_folder_key_from_folder_maps_common_aliases():
 
 
 def test_cached_empty_company_results_are_applied_before_ttl_return():
-    from genimail_qt.mixins.email_list import EmailListMixin
+    from genimail_qt.mixins.email_company_search import CompanySearchMixin
 
     class _Probe:
         def __init__(self):
@@ -128,7 +128,7 @@ def test_cached_empty_company_results_are_applied_before_ttl_return():
             pass
 
     probe = _Probe()
-    EmailListMixin._load_company_messages_all_folders(probe, "acme.com")
+    CompanySearchMixin._load_company_messages_all_folders(probe, "acme.com")
 
     assert probe.apply_calls == 1
     assert probe.company_result_messages == []
@@ -136,6 +136,7 @@ def test_cached_empty_company_results_are_applied_before_ttl_return():
 
 
 def test_company_load_uses_sqlite_cache_before_background_refresh():
+    from genimail_qt.mixins.email_company_search import CompanySearchMixin
     from genimail_qt.mixins.email_list import EmailListMixin
 
     class _Cache:
@@ -228,7 +229,7 @@ def test_company_load_uses_sqlite_cache_before_background_refresh():
             pass
 
     probe = _Probe()
-    EmailListMixin._load_company_messages_all_folders(probe, "acme.com")
+    CompanySearchMixin._load_company_messages_all_folders(probe, "acme.com")
 
     assert probe.apply_calls == 1
     assert [msg["id"] for msg in probe.filtered_messages] == ["1"]
@@ -390,7 +391,7 @@ def test_on_messages_loaded_ignores_stale_payload_token():
 
 
 def test_company_load_token_prevents_stale_results():
-    from genimail_qt.mixins.email_list import EmailListMixin
+    from genimail_qt.mixins.email_company_search import CompanySearchMixin
 
     class _Probe:
         def __init__(self):
@@ -419,7 +420,7 @@ def test_company_load_token_prevents_stale_results():
         "fetched_at": time.time(),
     }
 
-    EmailListMixin._on_company_messages_loaded(probe, payload)
+    CompanySearchMixin._on_company_messages_loaded(probe, payload)
 
     assert probe.company_query_cache["acme.com"]["messages"] == [{"id": "fresh"}]
     assert probe.apply_calls == 0
@@ -470,6 +471,7 @@ def test_reset_company_state_clears_all_fields():
 
 
 def test_company_search_falls_back_to_local_on_failure():
+    from genimail_qt.mixins.email_company_search import CompanySearchMixin
     from genimail_qt.mixins.email_list import EmailListMixin
 
     class _SearchInput:
@@ -522,7 +524,7 @@ def test_company_search_falls_back_to_local_on_failure():
             pass
 
         def _on_company_search_error(self, query, search_text, token, trace_text):
-            EmailListMixin._on_company_search_error(self, query, search_text, token, trace_text)
+            CompanySearchMixin._on_company_search_error(self, query, search_text, token, trace_text)
 
         @staticmethod
         def _message_matches_search(msg, text):
@@ -538,7 +540,7 @@ def test_company_search_falls_back_to_local_on_failure():
             self.filtered_messages = source
 
     probe = _Probe()
-    EmailListMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
+    CompanySearchMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
 
     assert probe.apply_calls == 1
     assert [msg["id"] for msg in probe.filtered_messages] == ["1", "2"]
@@ -547,6 +549,7 @@ def test_company_search_falls_back_to_local_on_failure():
 
 
 def test_company_search_loads_from_sqlite_cache_before_remote_refine():
+    from genimail_qt.mixins.email_company_search import CompanySearchMixin
     from genimail_qt.mixins.email_list import EmailListMixin
 
     class _Cache:
@@ -644,7 +647,7 @@ def test_company_search_loads_from_sqlite_cache_before_remote_refine():
             pass
 
     probe = _Probe()
-    EmailListMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
+    CompanySearchMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
 
     assert [msg["id"] for msg in probe.company_result_messages] == ["c1"]
     assert [msg["id"] for msg in probe.filtered_messages] == ["c1"]

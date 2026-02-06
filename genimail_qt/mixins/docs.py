@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from genimail.constants import TAKEOFF_DEFAULT_COATS
-from genimail.domain.quotes import build_quote_context, create_quote_doc, open_document_file
+from genimail.domain.quotes import build_quote_context
+from genimail.infra.document_store import create_quote_doc, open_document_file
 from genimail.paths import DEFAULT_QUOTE_TEMPLATE_FILE, QUOTE_DIR, ROOT_DIR
 from genimail_qt.takeoff_engine import compute_takeoff, estimate_door_count, parse_length_to_feet
 

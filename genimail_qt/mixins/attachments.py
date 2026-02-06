@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QDialog, QListWidgetItem
 
 from genimail.browser import BrowserDownloadError
 from genimail.constants import CLOUD_PDF_FAILURE_PREVIEW_MAX
-from genimail.domain.quotes import open_document_file
+from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
 from genimail_qt.dialogs import CloudPdfLinkDialog
 

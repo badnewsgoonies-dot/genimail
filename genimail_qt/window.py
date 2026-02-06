@@ -11,6 +11,7 @@ from genimail_qt.helpers import Toaster, WorkerManager
 from genimail_qt.mixins import (
     AuthPollMixin,
     CompanyMixin,
+    CompanySearchMixin,
     ComposeMixin,
     DocsMixin,
     EmailAttachmentMixin,
@@ -34,6 +35,7 @@ class GeniMailQtWindow(
     WindowStateMixin,
     AuthPollMixin,
     CompanyMixin,
+    CompanySearchMixin,
     EmailListMixin,
     EmailAttachmentMixin,
     ComposeMixin,

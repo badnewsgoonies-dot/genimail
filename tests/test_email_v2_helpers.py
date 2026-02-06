@@ -6,10 +6,9 @@ from genimail.constants import DEFAULT_CLIENT_ID
 from genimail.domain.helpers import token_cache_path_for_client_id
 from genimail.domain.quotes import (
     build_quote_context,
-    create_quote_doc,
-    latest_doc_file,
     render_quote_template_text,
 )
+from genimail.infra.document_store import create_quote_doc, latest_doc_file
 from genimail.paths import CONFIG_DIR, TOKEN_CACHE_FILE
 
 
