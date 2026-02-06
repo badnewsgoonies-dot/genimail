@@ -4,16 +4,21 @@ from genimail.services.mail_sync import MailSyncService, collect_new_unread
 class DummyCache:
     def __init__(self, delta=None):
         self.delta = delta
+        self.delta_links = {}
+        if delta is not None:
+            self.delta_links["inbox"] = delta
         self.saved_delta = None
         self.deleted_ids = []
         self.saved_messages = []
 
     def get_delta_link(self, folder_id):
-        return self.delta
+        return self.delta_links.get(folder_id)
 
     def save_delta_link(self, folder_id, delta_link):
         self.saved_delta = (folder_id, delta_link)
-        self.delta = delta_link
+        self.delta_links[folder_id] = delta_link
+        if folder_id == "inbox":
+            self.delta = delta_link
 
     def delete_messages(self, message_ids):
         self.deleted_ids.extend(message_ids)
@@ -39,6 +44,40 @@ class DummyGraph:
         if delta_link is None:
             return [], self.init_delta, []
         return self.delta_response
+
+
+class FolderAwareGraph:
+    def __init__(self):
+        self.get_messages_calls = []
+        self.get_delta_calls = []
+        self.fail_folders = set()
+        self.messages_by_folder = {
+            "inbox": [{"id": "in-1", "isRead": False}],
+            "sentitems": [{"id": "sent-1", "isRead": True}],
+            "junkemail": [{"id": "junk-1", "isRead": False}],
+        }
+        self.deleted_by_folder = {
+            "inbox": ["deleted-1"],
+            "sentitems": [],
+            "junkemail": ["deleted-2"],
+        }
+
+    def get_messages(self, folder_id="inbox", top=10):
+        _ = top
+        self.get_messages_calls.append(folder_id)
+        return list(self.messages_by_folder.get(folder_id, [])), None
+
+    def get_messages_delta(self, folder_id="inbox", delta_link=None):
+        self.get_delta_calls.append((folder_id, delta_link))
+        if folder_id in self.fail_folders:
+            raise RuntimeError(f"delta unavailable for {folder_id}")
+        if delta_link is None:
+            return [], f"delta-{folder_id}", []
+        return (
+            list(self.messages_by_folder.get(folder_id, [])),
+            f"delta-next-{folder_id}",
+            list(self.deleted_by_folder.get(folder_id, [])),
+        )
 
 
 def test_initialize_delta_token_uses_cached_value():
@@ -99,3 +138,49 @@ def test_collect_new_unread_tracks_known_ids():
 
     assert [m["id"] for m in new_unread] == ["c"]
     assert known_ids == {"a", "b", "c"}
+
+
+def test_initialize_delta_tokens_handles_partial_folder_failures():
+    cache = DummyCache(delta=None)
+    graph = FolderAwareGraph()
+    graph.fail_folders = {"junkemail"}
+    service = MailSyncService(graph, cache)
+
+    payload = service.initialize_delta_tokens(["sentitems", "junkemail"], primary_folder_id="inbox")
+
+    assert payload["folder_ids"] == ["inbox", "sentitems", "junkemail"]
+    assert payload["ready"] == ["inbox", "sentitems"]
+    assert len(payload["errors"]) == 1
+    assert "junkemail" in payload["errors"][0]
+
+
+def test_sync_delta_for_folders_returns_primary_and_aggregate_results():
+    cache = DummyCache(delta="existing")
+    cache.delta_links.update({"sentitems": "existing", "junkemail": "existing"})
+    graph = FolderAwareGraph()
+    service = MailSyncService(graph, cache)
+
+    payload = service.sync_delta_for_folders(["sentitems", "junkemail"], fallback_top=10, primary_folder_id="inbox")
+
+    assert payload["folder_ids"] == ["inbox", "sentitems", "junkemail"]
+    assert [msg["id"] for msg in payload["messages"]] == ["in-1"]
+    assert payload["deleted_ids"] == ["deleted-1"]
+    assert [msg["id"] for msg in payload["all_messages"]] == ["in-1", "sent-1", "junk-1"]
+    assert payload["all_deleted_ids"] == ["deleted-1", "deleted-2"]
+    assert payload["errors"] == []
+
+
+def test_sync_delta_for_folders_continues_when_one_folder_fails():
+    cache = DummyCache(delta="existing")
+    cache.delta_links.update({"sentitems": "existing", "junkemail": "existing"})
+    graph = FolderAwareGraph()
+    graph.fail_folders = {"sentitems"}
+    service = MailSyncService(graph, cache)
+
+    payload = service.sync_delta_for_folders(["sentitems", "junkemail"], fallback_top=10, primary_folder_id="inbox")
+
+    assert [msg["id"] for msg in payload["messages"]] == ["in-1"]
+    assert [msg["id"] for msg in payload["all_messages"]] == ["in-1", "junk-1"]
+    assert payload["all_deleted_ids"] == ["deleted-1", "deleted-2"]
+    assert len(payload["errors"]) == 1
+    assert "sentitems" in payload["errors"][0]

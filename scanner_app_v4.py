@@ -1,4 +1,4 @@
-from deprecated.scanner_app_v4_impl import main
+from scanner_app_v4_impl import main
 
 
 if __name__ == "__main__":

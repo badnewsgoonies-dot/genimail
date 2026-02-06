@@ -27,12 +27,22 @@ def test_parse_company_query_uses_smart_rules():
 
 def test_message_matches_company_filter_rules():
     msg = {"from": {"emailAddress": {"name": "Airmiles Support", "address": "notifications@airmiles.ca"}}}
+    sent_msg = {
+        "from": {"emailAddress": {"name": "Me", "address": "me@mycompany.com"}},
+        "toRecipients": [{"emailAddress": {"name": "Acme Billing", "address": "billing@acme.com"}}],
+        "ccRecipients": [{"emailAddress": {"name": "Vendor Support", "address": "help@vendor.org"}}],
+    }
 
     assert GeniMailQtWindow._message_matches_company_filter(msg, "notifications@airmiles.ca")
     assert GeniMailQtWindow._message_matches_company_filter(msg, "airmiles.ca")
     assert GeniMailQtWindow._message_matches_company_filter(msg, "airmiles")
     assert not GeniMailQtWindow._message_matches_company_filter(msg, "billing@airmiles.ca")
     assert not GeniMailQtWindow._message_matches_company_filter(msg, "example.com")
+
+    assert GeniMailQtWindow._message_matches_company_filter(sent_msg, "billing@acme.com")
+    assert GeniMailQtWindow._message_matches_company_filter(sent_msg, "acme.com")
+    assert GeniMailQtWindow._message_matches_company_filter(sent_msg, "vendor support")
+    assert not GeniMailQtWindow._message_matches_company_filter(sent_msg, "example.com")
 
 
 def test_load_company_queries_supports_legacy_dict_and_new_list():
@@ -123,6 +133,108 @@ def test_cached_empty_company_results_are_applied_before_ttl_return():
     assert probe.apply_calls == 1
     assert probe.company_result_messages == []
     assert probe.filtered_messages == []
+
+
+def test_company_load_uses_sqlite_cache_before_background_refresh():
+    from genimail_qt.mixins.email_list import EmailListMixin
+
+    class _Cache:
+        @staticmethod
+        def search_company_messages(query, search_text=None):
+            _ = search_text
+            assert query == "acme.com"
+            return [
+                {
+                    "id": "1",
+                    "subject": "Invoice",
+                    "from": {"emailAddress": {"name": "Acme", "address": "billing@acme.com"}},
+                    "receivedDateTime": "2026-01-01T00:00:00Z",
+                    "_folder_id": "sentitems",
+                    "toRecipients": [],
+                    "ccRecipients": [],
+                }
+            ]
+
+    class _Workers:
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, _fn, _on_result, _on_error=None):
+            self.submit_calls += 1
+
+    class _Search:
+        @staticmethod
+        def text():
+            return ""
+
+    class _List:
+        @staticmethod
+        def clear():
+            pass
+
+    class _Probe:
+        def __init__(self):
+            self.graph = object()
+            self.cache = _Cache()
+            self.workers = _Workers()
+            self.search_input = _Search()
+            self.message_list = _List()
+            self.current_folder_id = "inbox"
+            self.company_folder_sources = [{"id": "sentitems", "key": "sentitems", "label": "Sent"}]
+            self.company_query_cache = {}
+            self.company_query_inflight = set()
+            self.company_result_messages = []
+            self.company_folder_filter = "all"
+            self.current_messages = []
+            self.filtered_messages = []
+            self.apply_calls = 0
+            self.status = ""
+            self._company_load_token = 0
+
+        @staticmethod
+        def _folder_key_for_id(folder_id):
+            return folder_id
+
+        @staticmethod
+        def _with_folder_meta(msg, folder_id, folder_key, folder_label=None):
+            return EmailListMixin._with_folder_meta(msg, folder_id, folder_key, folder_label)
+
+        @staticmethod
+        def _message_matches_company_filter(msg, query):
+            return GeniMailQtWindow._message_matches_company_filter(msg, query)
+
+        def _apply_company_folder_filter(self):
+            self.apply_calls += 1
+            self.current_messages = list(self.company_result_messages)
+            self.filtered_messages = list(self.company_result_messages)
+
+        @staticmethod
+        def _show_message_list():
+            pass
+
+        @staticmethod
+        def _clear_detail_view(_msg=None):
+            pass
+
+        def _set_status(self, text):
+            self.status = text
+
+        @staticmethod
+        def _on_company_messages_loaded(_payload):
+            pass
+
+        @staticmethod
+        def _on_company_messages_error(_query, _trace_text):
+            pass
+
+    probe = _Probe()
+    EmailListMixin._load_company_messages_all_folders(probe, "acme.com")
+
+    assert probe.apply_calls == 1
+    assert [msg["id"] for msg in probe.filtered_messages] == ["1"]
+    assert probe.workers.submit_calls == 1
+    assert probe.company_query_inflight == {"acme.com"}
+    assert probe._company_load_token == 1
 
 
 def test_open_company_manager_clears_with_reload_when_active_tab_removed(monkeypatch):
@@ -432,3 +544,111 @@ def test_company_search_falls_back_to_local_on_failure():
     assert [msg["id"] for msg in probe.filtered_messages] == ["1", "2"]
     assert probe._company_search_override is None
     assert "locally filtered" in probe.status.lower()
+
+
+def test_company_search_loads_from_sqlite_cache_before_remote_refine():
+    from genimail_qt.mixins.email_list import EmailListMixin
+
+    class _Cache:
+        @staticmethod
+        def search_company_messages(query, search_text=None):
+            assert search_text == "invoice"
+            assert query == "acme.com"
+            return [
+                {
+                    "id": "c1",
+                    "subject": "Invoice reminder",
+                    "bodyPreview": "Pay now",
+                    "from": {"emailAddress": {"name": "Acme", "address": "billing@acme.com"}},
+                    "receivedDateTime": "2026-01-01T00:00:00Z",
+                    "_folder_id": "inbox",
+                    "toRecipients": [],
+                    "ccRecipients": [],
+                }
+            ]
+
+    class _SearchInput:
+        @staticmethod
+        def text():
+            return "invoice"
+
+    class _Workers:
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit(self, _fn, _on_result, _on_error):
+            self.submit_calls += 1
+
+    class _List:
+        @staticmethod
+        def count():
+            return 0
+
+    class _Probe:
+        def __init__(self):
+            self.graph = object()
+            self.cache = _Cache()
+            self.search_input = _SearchInput()
+            self.workers = _Workers()
+            self.company_filter_domain = "acme.com"
+            self.company_result_messages = []
+            self.company_folder_filter = "all"
+            self.company_folder_sources = [{"id": "inbox", "key": "inbox", "label": "Inbox"}]
+            self.current_folder_id = "inbox"
+            self.filtered_messages = []
+            self.current_messages = []
+            self._company_load_token = 0
+            self._company_search_override = None
+            self.apply_calls = 0
+            self.status = ""
+            self.message_list = _List()
+
+        @staticmethod
+        def _folder_key_for_id(folder_id):
+            return folder_id
+
+        @staticmethod
+        def _with_folder_meta(msg, folder_id, folder_key, folder_label=None):
+            return EmailListMixin._with_folder_meta(msg, folder_id, folder_key, folder_label)
+
+        @staticmethod
+        def _message_matches_company_filter(msg, query):
+            return GeniMailQtWindow._message_matches_company_filter(msg, query)
+
+        @staticmethod
+        def _message_matches_search(msg, text):
+            return EmailListMixin._message_matches_search(msg, text)
+
+        @staticmethod
+        def _show_message_list():
+            pass
+
+        @staticmethod
+        def _clear_detail_view(_msg=None):
+            pass
+
+        def _apply_company_folder_filter(self):
+            self.apply_calls += 1
+            search = (self.search_input.text() or "").strip().lower()
+            rows = list(self.company_result_messages)
+            if search:
+                rows = [msg for msg in rows if self._message_matches_search(msg, search)]
+            self.current_messages = rows
+            self.filtered_messages = rows
+
+        def _set_status(self, text):
+            self.status = text
+
+        @staticmethod
+        def _on_company_search_loaded(_payload):
+            pass
+
+    probe = _Probe()
+    EmailListMixin._load_company_messages_with_search(probe, "acme.com", "invoice")
+
+    assert [msg["id"] for msg in probe.company_result_messages] == ["c1"]
+    assert [msg["id"] for msg in probe.filtered_messages] == ["c1"]
+    assert probe.apply_calls == 1
+    assert probe.workers.submit_calls == 1
+    assert probe._company_load_token == 1
+    assert "local message" in probe.status.lower()

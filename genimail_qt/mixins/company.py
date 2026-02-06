@@ -423,17 +423,39 @@ class CompanyMixin:
         kind, value = cls._parse_company_query(query)
         if not value:
             return True
+        participants = []
+
         sender = msg.get("from", {}).get("emailAddress", {})
-        address = (sender.get("address") or "").strip().lower()
-        name = (sender.get("name") or "").strip().lower()
+        participants.append(
+            (
+                (sender.get("address") or "").strip().lower(),
+                (sender.get("name") or "").strip().lower(),
+            )
+        )
+
+        for field in ("toRecipients", "ccRecipients"):
+            for entry in msg.get(field) or []:
+                email = (entry or {}).get("emailAddress", {})
+                participants.append(
+                    (
+                        (email.get("address") or "").strip().lower(),
+                        (email.get("name") or "").strip().lower(),
+                    )
+                )
+
+        addresses = [address for address, _name in participants if address]
+        names = [name for _address, name in participants if name]
 
         if kind == "email":
-            return address == value
+            return any(address == value for address in addresses)
         if kind == "domain":
-            if "@" not in address:
-                return False
-            return address.split("@", 1)[1] == value
-        return value in address or value in name
+            for address in addresses:
+                if "@" not in address:
+                    continue
+                if address.split("@", 1)[1] == value:
+                    return True
+            return False
+        return any(value in address for address in addresses) or any(value in name for name in names)
 
     def _check_detail_message_visibility(self):
         if hasattr(self, "_ensure_detail_message_visible"):

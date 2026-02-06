@@ -97,9 +97,17 @@ class EmailListMixin:
             return
 
         self._company_search_override = None
+        cache_messages = EmailListMixin._load_company_messages_from_cache(self, query_key)
+        showing_cache = bool(cache_messages)
+        if showing_cache:
+            self.company_result_messages = cache_messages
+            self.company_folder_filter = self.company_folder_filter or "all"
+            self._apply_company_folder_filter()
+            self._set_status(f'Loaded {len(self.filtered_messages)} cached message(s) for "{query_key}".')
+
         cached = self.company_query_cache.get(query_key)
         now = time.time()
-        if cached:
+        if cached and not showing_cache:
             cached_messages = list(cached.get("messages") or [])
             self.company_result_messages = cached_messages
             self.company_folder_filter = self.company_folder_filter or "all"
@@ -112,6 +120,13 @@ class EmailListMixin:
                 )
                 return
             self._set_status(f"Refreshing {query_key} across folders...")
+        elif cached and showing_cache:
+            cache_age = now - float(cached.get("fetched_at") or 0)
+            if cache_age <= EMAIL_COMPANY_CACHE_TTL_SEC:
+                return
+            self._set_status(f"Refreshing {query_key} across folders...")
+        elif showing_cache:
+            self._set_status(f"Refreshing {query_key} across folders...")
         else:
             self._set_status(f"Loading {query_key} across folders...")
 
@@ -121,7 +136,7 @@ class EmailListMixin:
         self.company_query_inflight.add(query_key)
         self._company_load_token = getattr(self, "_company_load_token", 0) + 1
         load_token = self._company_load_token
-        if not cached:
+        if not cached and not showing_cache:
             self._show_message_list()
             self.current_messages = []
             self.filtered_messages = []
@@ -163,6 +178,12 @@ class EmailListMixin:
                     errors.append(f"{folder_label}: {exc}")
                     continue
 
+            if page and hasattr(self, "cache") and hasattr(self.cache, "save_messages"):
+                try:
+                    self.cache.save_messages(page, folder_id)
+                except Exception as exc:
+                    print(f"[CACHE] unable to save company page for {folder_label}: {exc}")
+
             try:
                 for msg in page or []:
                     msg_with_folder = self._with_folder_meta(msg, folder_id, folder_key, folder_label)
@@ -180,9 +201,39 @@ class EmailListMixin:
         messages = sorted(deduped.values(), key=lambda msg: msg.get("receivedDateTime", ""), reverse=True)
         return {"query": company_query, "messages": messages, "errors": errors, "fetched_at": time.time(), "token": token}
 
+    def _load_company_messages_from_cache(self, company_query, search_text=None):
+        if not hasattr(self, "cache") or not hasattr(self.cache, "search_company_messages"):
+            return []
+        try:
+            cached_rows = self.cache.search_company_messages(company_query, search_text=search_text) or []
+        except Exception as exc:
+            print(f"[CACHE] company query failed for {company_query}: {exc}")
+            return []
+
+        sources_by_id = {
+            (source.get("id") or "").strip().lower(): source
+            for source in (self.company_folder_sources or [])
+            if (source.get("id") or "").strip()
+        }
+        deduped = {}
+        for msg in cached_rows:
+            if not self._message_matches_company_filter(msg, company_query):
+                continue
+            folder_id = (msg.get("_folder_id") or "").strip() or self.current_folder_id
+            source = sources_by_id.get(folder_id.strip().lower()) or {}
+            folder_key = source.get("key") or self._folder_key_for_id(folder_id)
+            folder_label = source.get("label") or folder_key
+            enriched = self._with_folder_meta(msg, folder_id, folder_key, folder_label)
+            msg_id = enriched.get("id")
+            if not msg_id:
+                continue
+            existing = deduped.get(msg_id)
+            if existing is None or enriched.get("receivedDateTime", "") > existing.get("receivedDateTime", ""):
+                deduped[msg_id] = enriched
+
+        return sorted(deduped.values(), key=lambda item: item.get("receivedDateTime", ""), reverse=True)
+
     def _load_company_messages_with_search(self, company_query, search_text):
-        if not self.graph:
-            return
         query_key = (company_query or "").strip().lower()
         search_key = (search_text or "").strip().lower()
         if not query_key:
@@ -192,10 +243,26 @@ class EmailListMixin:
             return
 
         self._company_search_override = None
+        if not self.company_result_messages:
+            cache_messages = EmailListMixin._load_company_messages_from_cache(self, query_key, search_key)
+            if cache_messages:
+                self.company_result_messages = cache_messages
+
+        self.company_folder_filter = self.company_folder_filter or "all"
+        self._show_message_list()
+        self._apply_company_folder_filter()
+        local_count = len(self.filtered_messages)
+
+        if not self.graph:
+            self._set_status(f'Found {local_count} local message(s) for "{query_key}".')
+            return
+
         self._company_load_token = getattr(self, "_company_load_token", 0) + 1
         load_token = self._company_load_token
-        self._show_message_list()
-        self._set_status(f'Searching "{search_key}" in "{query_key}"...')
+        if local_count:
+            self._set_status(f'Found {local_count} local message(s). Refining "{query_key}" search...')
+        else:
+            self._set_status(f'Searching "{search_key}" in "{query_key}"...')
         self.workers.submit(
             lambda q=query_key, text=search_key, token=load_token: self._company_search_worker(q, text, token),
             self._on_company_search_loaded,
@@ -231,6 +298,12 @@ class EmailListMixin:
                 except Exception as exc:
                     errors.append(f"{folder_label}: {exc}")
                     continue
+
+            if page and hasattr(self, "cache") and hasattr(self.cache, "save_messages"):
+                try:
+                    self.cache.save_messages(page, folder_id)
+                except Exception as exc:
+                    print(f"[CACHE] unable to save company search page for {folder_label}: {exc}")
 
             try:
                 for msg in page or []:
@@ -304,7 +377,6 @@ class EmailListMixin:
             return
 
         self._company_search_override = None
-        self._apply_company_folder_filter()
         self._set_status(f'Search unavailable right now. Showing locally filtered results for "{query}".')
         print(trace_text)
 

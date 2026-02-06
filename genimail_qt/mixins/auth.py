@@ -9,6 +9,26 @@ from genimail.services.mail_sync import MailSyncService, collect_new_unread
 
 
 class AuthPollMixin:
+    def _collect_sync_folder_ids(self):
+        ordered = []
+        seen = set()
+
+        def add(folder_id):
+            value = (folder_id or "").strip()
+            if not value:
+                return
+            key = value.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            ordered.append(value)
+
+        add("inbox")
+        for source in self.company_folder_sources or []:
+            add((source or {}).get("id") or (source or {}).get("key"))
+        add(self.current_folder_id)
+        return ordered
+
     def _auto_connect_on_startup(self):
         if self.graph is not None:
             return
@@ -98,11 +118,27 @@ class AuthPollMixin:
         self._poll_timer.start()
 
     def _init_delta_token_worker(self):
-        self.sync_service.initialize_delta_token(folder_id="inbox")
-        return True
+        return self.sync_service.initialize_delta_tokens(
+            folder_ids=self._collect_sync_folder_ids(),
+            primary_folder_id="inbox",
+        )
 
-    def _on_delta_token_ready(self, _):
-        self._set_status("Connected. Delta sync ready.")
+    def _on_delta_token_ready(self, payload):
+        if not isinstance(payload, dict):
+            self._set_status("Connected. Delta sync ready.")
+            return
+
+        ready = payload.get("ready") or []
+        folders = payload.get("folder_ids") or []
+        errors = payload.get("errors") or []
+        if errors:
+            self._set_status(f"Connected. Delta sync ready for {len(ready)}/{len(folders)} folders.")
+            print("[DELTA] initialization warnings:")
+            for line in errors:
+                print(f"[DELTA] {line}")
+            return
+
+        self._set_status(f"Connected. Delta sync ready ({len(ready)} folder(s)).")
 
     def _poll_once(self):
         if not self.sync_service:
@@ -116,11 +152,11 @@ class AuthPollMixin:
         self.workers.submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
 
     def _poll_worker(self):
-        messages, deleted_ids = self.sync_service.sync_delta_once(
-            folder_id="inbox",
+        return self.sync_service.sync_delta_for_folders(
+            folder_ids=self._collect_sync_folder_ids(),
             fallback_top=EMAIL_DELTA_FALLBACK_TOP,
+            primary_folder_id="inbox",
         )
-        return {"messages": messages or [], "deleted_ids": deleted_ids or []}
 
     def _on_poll_result(self, payload):
         self._poll_in_flight = False
@@ -128,19 +164,26 @@ class AuthPollMixin:
 
         updates = payload.get("messages") or []
         deleted_ids = payload.get("deleted_ids") or []
+        all_updates = payload.get("all_messages") or list(updates)
+        all_deleted_ids = payload.get("all_deleted_ids") or list(deleted_ids)
+        errors = payload.get("errors") or []
+        if errors:
+            print("[SYNC] partial folder errors:")
+            for line in errors:
+                print(f"[SYNC] {line}")
 
         if self.company_filter_domain:
-            new_unread = collect_new_unread(updates, self.known_ids)
-            for msg in updates:
+            new_unread = collect_new_unread(all_updates, self.known_ids)
+            for msg in all_updates:
                 msg_id = msg.get("id")
                 if msg_id:
                     self.known_ids.add(msg_id)
-            if deleted_ids:
-                for msg_id in deleted_ids:
+            if all_deleted_ids:
+                for msg_id in all_deleted_ids:
                     self.known_ids.discard(msg_id)
             if new_unread:
                 self._set_status(f"{len(new_unread)} new unread message(s)")
-            elif updates or deleted_ids:
+            elif all_updates or all_deleted_ids:
                 self._set_status("Connected. Sync up to date.")
             return
 
@@ -149,17 +192,17 @@ class AuthPollMixin:
             active_folder_key = (self._folder_key_for_id(self.current_folder_id) or active_folder_key).strip().lower()
 
         if active_folder_key != "inbox":
-            new_unread = collect_new_unread(updates, self.known_ids)
-            for msg in updates:
+            new_unread = collect_new_unread(all_updates, self.known_ids)
+            for msg in all_updates:
                 msg_id = msg.get("id")
                 if msg_id:
                     self.known_ids.add(msg_id)
-            if deleted_ids:
-                for msg_id in deleted_ids:
+            if all_deleted_ids:
+                for msg_id in all_deleted_ids:
                     self.known_ids.discard(msg_id)
             if new_unread:
                 self._set_status(f"{len(new_unread)} new unread message(s)")
-            elif updates or deleted_ids:
+            elif all_updates or all_deleted_ids:
                 self._set_status("Connected. Sync up to date.")
             return
 
