@@ -15,6 +15,7 @@ except Exception:
     QPdfView = None
     HAS_QTPDF = False
 
+from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
 from genimail_qt.webview_page import FilteredWebEnginePage
 
@@ -147,7 +148,11 @@ class PdfMixin:
             self.toaster.show(
                 f"Download complete · {os.path.basename(path)}",
                 kind="success",
-                action=lambda p=path: self._open_download_path(p),
+                action=lambda p=path: (
+                    self._open_pdf_file(p, activate=True)
+                    if p.lower().endswith(".pdf")
+                    else open_document_file(p)
+                ),
             )
 
     def _find_pdf_tab_index(self, path):
