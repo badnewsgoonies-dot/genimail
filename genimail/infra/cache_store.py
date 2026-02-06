@@ -429,35 +429,37 @@ class EmailCache(CloudPdfStoreMixin):
         return messages
 
     def _recipient_map_for_messages(self, message_ids):
-        if not message_ids:
+        unique_ids = self._unique_message_ids(message_ids)
+        if not unique_ids:
             return {}
-        placeholders = ",".join("?" for _ in message_ids)
-        cur = self.conn.execute(
-            f"""SELECT message_id, role, recipient_name, recipient_address
-               FROM message_recipients
-               WHERE message_id IN ({placeholders})
-               ORDER BY message_id, role, recipient_address""",
-            tuple(message_ids),
-        )
         recipient_map = {}
-        for row in cur.fetchall():
-            msg_id = row["message_id"]
-            role = (row["role"] or "").strip().lower()
-            if role == "to":
-                key = "toRecipients"
-            elif role == "cc":
-                key = "ccRecipients"
-            else:
-                continue
-            bucket = recipient_map.setdefault(msg_id, {"toRecipients": [], "ccRecipients": []})
-            bucket[key].append(
-                {
-                    "emailAddress": {
-                        "name": row["recipient_name"],
-                        "address": row["recipient_address"],
-                    }
-                }
+        for chunk in self._chunked(unique_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            cur = self.conn.execute(
+                f"""SELECT message_id, role, recipient_name, recipient_address
+                   FROM message_recipients
+                   WHERE message_id IN ({placeholders})
+                   ORDER BY message_id, role, recipient_address""",
+                tuple(chunk),
             )
+            for row in cur.fetchall():
+                msg_id = row["message_id"]
+                role = (row["role"] or "").strip().lower()
+                if role == "to":
+                    key = "toRecipients"
+                elif role == "cc":
+                    key = "ccRecipients"
+                else:
+                    continue
+                bucket = recipient_map.setdefault(msg_id, {"toRecipients": [], "ccRecipients": []})
+                bucket[key].append(
+                    {
+                        "emailAddress": {
+                            "name": row["recipient_name"],
+                            "address": row["recipient_address"],
+                        }
+                    }
+                )
         return recipient_map
 
     @staticmethod
