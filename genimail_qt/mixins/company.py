@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import QPushButton
 
 from genimail.constants import FOLDER_DISPLAY
-from genimail_qt.company_tab_manager_dialog import CompanyTabManagerDialog, normalize_company_query
+from genimail.domain.helpers import normalize_company_query
+from genimail_qt.company_tab_manager_dialog import CompanyTabManagerDialog
 
 
 class CompanyMixin:
@@ -262,15 +263,23 @@ class CompanyMixin:
             return
 
         self.company_filter_domain = domain
-        self.company_folder_filter = "all"
+        if not self.company_folder_filter:
+            self.company_folder_filter = "all"
         self._sync_company_tab_checks()
         self._sync_company_folder_filter_checks()
         self._set_company_folder_filter_visible(True)
         self._update_company_filter_badge()
         self._show_message_list()
         self._set_status(f"Loading messages for {domain} across folders...")
+        self._set_company_tabs_enabled(False)
         if hasattr(self, "_load_company_messages_all_folders"):
             self._load_company_messages_all_folders(domain)
+
+    def _set_company_tabs_enabled(self, enabled):
+        """Enable/disable company tab buttons during loading."""
+        for btn in getattr(self, "company_tab_buttons", {}).values():
+            if btn is not None:
+                btn.setEnabled(enabled)
 
     def _update_company_filter_badge(self):
         if not hasattr(self, "company_filter_badge"):

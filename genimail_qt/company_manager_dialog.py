@@ -302,11 +302,6 @@ class CompanyManagerDialog(QDialog):
             "ubereats.com": "Uber Eats",
             "doordash.com": "DoorDash",
             "shopify.com": "Shopify",
-            "stripe.com": "Stripe",
-            "github.com": "GitHub",
-            "docusign.com": "DocuSign",
-            "docusign.net": "DocuSign",
-            "interac.ca": "Interac",
         }
         labeled_count = 0
         companies = self.config.get("companies", {}) or {}

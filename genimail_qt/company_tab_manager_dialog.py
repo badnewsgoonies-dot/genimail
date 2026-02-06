@@ -11,14 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-
-def normalize_company_query(value):
-    query = (value or "").strip().lower()
-    if not query:
-        return ""
-    if query.startswith("@"):
-        return query[1:].strip()
-    return query
+from genimail.domain.helpers import normalize_company_query
 
 
 class CompanyTabManagerDialog(QDialog):

@@ -411,6 +411,14 @@ def test_company_load_token_prevents_stale_results():
         def _set_status(_text):
             pass
 
+        @staticmethod
+        def _set_company_tabs_enabled(_enabled):
+            pass
+
+        @staticmethod
+        def _evict_company_cache():
+            pass
+
     probe = _Probe()
     payload = {
         "token": 1,

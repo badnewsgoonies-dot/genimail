@@ -138,6 +138,16 @@ def strip_html(text):
     return "\n".join(cleaned).strip()
 
 
+def normalize_company_query(value):
+    """Normalize a company domain/email query: strip, lowercase, remove leading @."""
+    query = (value or "").strip().lower()
+    if not query:
+        return None
+    if query.startswith("@"):
+        query = query[1:].strip()
+    return query or None
+
+
 def domain_to_company(domain):
     """Convert email domain to a readable company name."""
     if not domain:

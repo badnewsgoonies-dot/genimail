@@ -10,6 +10,7 @@ import time
 from genimail.constants import (
     EMAIL_COMPANY_CACHE_TTL_SEC,
     EMAIL_COMPANY_FETCH_PER_FOLDER,
+    EMAIL_COMPANY_MEMORY_CACHE_MAX,
 )
 
 
@@ -84,6 +85,7 @@ class CompanySearchMixin:
     def _company_messages_worker(self, company_query, token=None):
         deduped = {}
         errors = []
+        fallback_count = 0
         sources = list(self.company_folder_sources or [])
         if not sources:
             sources = [{"id": self.current_folder_id, "key": self._folder_key_for_id(self.current_folder_id), "label": "Current"}]
@@ -107,6 +109,7 @@ class CompanySearchMixin:
                         folder_id=folder_id,
                         top=EMAIL_COMPANY_FETCH_PER_FOLDER,
                     )
+                    fallback_count += 1
                 except Exception as exc:
                     errors.append(f"{folder_label}: {exc}")
                     continue
@@ -132,7 +135,7 @@ class CompanySearchMixin:
                 errors.append(f"{folder_label}: {exc}")
 
         messages = sorted(deduped.values(), key=lambda msg: msg.get("receivedDateTime", ""), reverse=True)
-        return {"query": company_query, "messages": messages, "errors": errors, "fetched_at": time.time(), "token": token}
+        return {"query": company_query, "messages": messages, "errors": errors, "fallback_count": fallback_count, "fetched_at": time.time(), "token": token}
 
     def _load_company_messages_from_cache(self, company_query, search_text=None):
         if not hasattr(self, "cache") or not hasattr(self.cache, "search_company_messages"):
@@ -211,6 +214,7 @@ class CompanySearchMixin:
     def _company_search_worker(self, company_query, search_text, token):
         deduped = {}
         errors = []
+        fallback_count = 0
         sources = list(self.company_folder_sources or [])
         if not sources:
             sources = [{"id": self.current_folder_id, "key": self._folder_key_for_id(self.current_folder_id), "label": "Current"}]
@@ -232,6 +236,7 @@ class CompanySearchMixin:
                         folder_id=folder_id,
                         top=EMAIL_COMPANY_FETCH_PER_FOLDER,
                     )
+                    fallback_count += 1
                 except Exception as exc:
                     errors.append(f"{folder_label}: {exc}")
                     continue
@@ -264,6 +269,7 @@ class CompanySearchMixin:
             "search_text": search_text,
             "messages": messages,
             "errors": errors,
+            "fallback_count": fallback_count,
             "fetched_at": time.time(),
             "token": token,
         }
@@ -289,6 +295,7 @@ class CompanySearchMixin:
             self._apply_company_folder_filter()
             return
         if payload_search != current_search:
+            self._company_search_override = None
             return
 
         self._company_search_override = {
@@ -301,12 +308,18 @@ class CompanySearchMixin:
         self._ensure_detail_message_visible()
 
         errors = payload.get("errors") or []
+        fallback_count = payload.get("fallback_count") or 0
+        msg_count = len(self.filtered_messages)
         if errors:
             self._set_status(
-                f'Found {len(self.filtered_messages)} message(s) for "{query}" with partial folder search errors.'
+                f'Found {msg_count} message(s) for "{query}" with partial folder search errors.'
+            )
+        elif fallback_count:
+            self._set_status(
+                f'Found {msg_count} message(s) for "{query}" ({fallback_count} folder(s) used local filtering).'
             )
         else:
-            self._set_status(f'Found {len(self.filtered_messages)} message(s) for "{query}" matching "{payload_search}".')
+            self._set_status(f'Found {msg_count} message(s) for "{query}" matching "{payload_search}".')
 
     def _on_company_search_error(self, query, search_text, token, trace_text):
         current_token = getattr(self, "_company_load_token", None)
@@ -324,11 +337,13 @@ class CompanySearchMixin:
     def _on_company_messages_loaded(self, payload):
         query = (payload.get("query") or "").strip().lower()
         self.company_query_inflight.discard(query)
+        self._set_company_tabs_enabled(True)
         self.company_query_cache[query] = {
             "messages": list(payload.get("messages") or []),
             "errors": list(payload.get("errors") or []),
             "fetched_at": float(payload.get("fetched_at") or time.time()),
         }
+        self._evict_company_cache()
 
         token = payload.get("token")
         current_token = getattr(self, "_company_load_token", None)
@@ -344,15 +359,22 @@ class CompanySearchMixin:
         self._apply_company_folder_filter()
 
         errors = payload.get("errors") or []
+        fallback_count = payload.get("fallback_count") or 0
+        msg_count = len(self.filtered_messages)
         if errors:
             self._set_status(
-                f'Loaded {len(self.filtered_messages)} message(s) for "{query}" with partial folder errors.'
+                f'Loaded {msg_count} message(s) for "{query}" with partial folder errors.'
+            )
+        elif fallback_count:
+            self._set_status(
+                f'Loaded {msg_count} message(s) for "{query}" ({fallback_count} folder(s) used local filtering).'
             )
         else:
-            self._set_status(f'Loaded {len(self.filtered_messages)} message(s) for "{query}" across folders.')
+            self._set_status(f'Loaded {msg_count} message(s) for "{query}" across folders.')
 
     def _on_company_messages_error(self, query, trace_text):
         self.company_query_inflight.discard((query or "").strip().lower())
+        self._set_company_tabs_enabled(True)
         if (query or "").strip().lower() != (self.company_filter_domain or "").strip().lower():
             return
         self._set_status(f'Unable to refresh "{query}" right now.')
@@ -361,6 +383,16 @@ class CompanySearchMixin:
     # ------------------------------------------------------------------
     # Company: helpers
     # ------------------------------------------------------------------
+
+    def _evict_company_cache(self):
+        """Remove oldest entries when cache exceeds max size."""
+        cache = self.company_query_cache
+        if len(cache) <= EMAIL_COMPANY_MEMORY_CACHE_MAX:
+            return
+        by_age = sorted(cache.items(), key=lambda kv: float(kv[1].get("fetched_at") or 0))
+        while len(cache) > EMAIL_COMPANY_MEMORY_CACHE_MAX and by_age:
+            oldest_key, _ = by_age.pop(0)
+            cache.pop(oldest_key, None)
 
     def _company_query_hints(self, query):
         if hasattr(self, "_parse_company_query"):
@@ -377,6 +409,7 @@ class CompanySearchMixin:
     def _apply_company_folder_filter(self):
         search_text = (self.search_input.text() or "").strip().lower()
         source_messages = list(self.company_result_messages or [])
+        using_override = False
         if search_text:
             override = getattr(self, "_company_search_override", None) or {}
             if (
@@ -384,6 +417,7 @@ class CompanySearchMixin:
                 and (override.get("search_text") or "").strip().lower() == search_text
             ):
                 source_messages = list(override.get("messages") or [])
+                using_override = True
         else:
             self._company_search_override = None
 
@@ -391,7 +425,9 @@ class CompanySearchMixin:
         if folder_filter != "all":
             source_messages = [msg for msg in source_messages if (msg.get("_folder_key") or "").strip().lower() == folder_filter]
 
-        if search_text:
+        # Only apply local search filter for base results; override messages
+        # are already filtered by the search worker.
+        if search_text and not using_override:
             source_messages = [msg for msg in source_messages if self._message_matches_search(msg, search_text)]
 
         self.current_messages = source_messages
