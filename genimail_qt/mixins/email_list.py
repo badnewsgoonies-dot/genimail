@@ -17,6 +17,19 @@ from genimail_qt.webview_utils import (
 
 
 class EmailListMixin:
+    def _set_messages(self, messages, *, track_ids=True):
+        """Single entry point for updating the displayed message list.
+
+        All code paths that change the full message list should call this
+        instead of writing ``current_messages`` and ``_render_message_list``
+        separately.  Keeps ``current_messages``, ``filtered_messages`` and
+        ``known_ids`` in sync.
+        """
+        self.current_messages = list(messages)
+        if track_ids:
+            self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
+        self._render_message_list()
+
     def _load_messages(self):
         if not self.graph:
             QMessageBox.information(self, "Connect First", "Connect to Microsoft before loading messages.")
@@ -36,7 +49,23 @@ class EmailListMixin:
         self._message_load_token = getattr(self, "_message_load_token", 0) + 1
         load_token = self._message_load_token
         self._show_message_list()
-        self._set_status("Loading messages...")
+
+        # Cache-first: show cached messages instantly before network fetch.
+        has_cached = False
+        if not search_text:
+            try:
+                cached = self.cache.get_messages(folder_id)
+                if cached:
+                    folder_key = self._folder_key_for_id(folder_id)
+                    enriched = [self._with_folder_meta(msg, folder_id, folder_key) for msg in cached]
+                    self._set_messages(enriched)
+                    if self.message_list.count() > 0:
+                        self.message_list.setCurrentRow(0)
+                    has_cached = True
+            except Exception:
+                pass
+
+        self._set_status("Refreshing..." if has_cached else "Loading messages...")
         self.workers.submit(
             lambda fid=folder_id, text=search_text, token=load_token: self._messages_worker(fid, text, token),
             self._on_messages_loaded,
@@ -56,6 +85,12 @@ class EmailListMixin:
             messages, _ = self.graph.get_messages(folder_id=folder_id, top=EMAIL_LIST_FETCH_TOP)
             search_lower = search_text.strip().lower()
             messages = [msg for msg in (messages or []) if self._message_matches_search(msg, search_lower)]
+        # Persist non-search results to cache for instant future folder loads.
+        if messages and not search_text:
+            try:
+                self.cache.save_messages(messages, folder_id)
+            except Exception:
+                pass
         return {"token": token, "folder_id": folder_id, "messages": messages or []}
 
     def _on_messages_loaded(self, payload):
@@ -72,10 +107,9 @@ class EmailListMixin:
         folder_key = self._folder_key_for_id(folder_id)
         self.company_result_messages = []
         self._company_search_override = None
-        self.current_messages = [self._with_folder_meta(msg, folder_id, folder_key) for msg in messages]
-        self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
+        enriched = [self._with_folder_meta(msg, folder_id, folder_key) for msg in messages]
+        self._set_messages(enriched)
         self._refresh_company_sidebar()
-        self._render_message_list()
         self._set_status(f"Loaded {len(self.filtered_messages)} of {len(self.current_messages)} messages")
         if self.message_list.count() > 0:
             self.message_list.setCurrentRow(0)

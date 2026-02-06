@@ -162,64 +162,49 @@ class AuthPollMixin:
         self._poll_in_flight = False
         self._poll_lock.release()
 
-        updates = payload.get("messages") or []
-        deleted_ids = payload.get("deleted_ids") or []
-        all_updates = payload.get("all_messages") or list(updates)
-        all_deleted_ids = payload.get("all_deleted_ids") or list(deleted_ids)
+        all_updates = payload.get("all_messages") or []
+        all_deleted_ids = payload.get("all_deleted_ids") or []
+        updates_by_folder = payload.get("updates_by_folder") or {}
+        deleted_by_folder = payload.get("deleted_by_folder") or {}
         errors = payload.get("errors") or []
         if errors:
             print("[SYNC] partial folder errors:")
             for line in errors:
                 print(f"[SYNC] {line}")
 
+        # Track new unread across ALL folders for notification badge.
+        new_unread = collect_new_unread(all_updates, self.known_ids)
+        for msg_id in all_deleted_ids:
+            self.known_ids.discard(msg_id)
+
+        # Company filter mode: don't update the message list (separate UI path).
         if self.company_filter_domain:
-            new_unread = collect_new_unread(all_updates, self.known_ids)
-            for msg in all_updates:
-                msg_id = msg.get("id")
-                if msg_id:
-                    self.known_ids.add(msg_id)
-            if all_deleted_ids:
-                for msg_id in all_deleted_ids:
-                    self.known_ids.discard(msg_id)
             if new_unread:
                 self._set_status(f"{len(new_unread)} new unread message(s)")
             elif all_updates or all_deleted_ids:
                 self._set_status("Connected. Sync up to date.")
             return
 
+        # Resolve which folder's updates to apply to the active message list.
         active_folder_key = (self.current_folder_id or "").strip().lower()
         if hasattr(self, "_folder_key_for_id"):
             active_folder_key = (self._folder_key_for_id(self.current_folder_id) or active_folder_key).strip().lower()
 
-        if active_folder_key != "inbox":
-            new_unread = collect_new_unread(all_updates, self.known_ids)
-            for msg in all_updates:
-                msg_id = msg.get("id")
-                if msg_id:
-                    self.known_ids.add(msg_id)
-            if all_deleted_ids:
-                for msg_id in all_deleted_ids:
-                    self.known_ids.discard(msg_id)
-            if new_unread:
-                self._set_status(f"{len(new_unread)} new unread message(s)")
-            elif all_updates or all_deleted_ids:
-                self._set_status("Connected. Sync up to date.")
-            return
+        folder_sync_key = "inbox" if active_folder_key == "inbox" else self.current_folder_id
+        active_updates = updates_by_folder.get(folder_sync_key, [])
+        active_deletes = deleted_by_folder.get(folder_sync_key, [])
 
-        if deleted_ids:
-            deleted_set = set(deleted_ids)
+        if active_deletes:
+            deleted_set = set(active_deletes)
             self.current_messages = [msg for msg in self.current_messages if msg.get("id") not in deleted_set]
-            self.filtered_messages = [msg for msg in self.filtered_messages if msg.get("id") not in deleted_set]
             for msg_id in deleted_set:
                 self.message_cache.pop(msg_id, None)
                 self.attachment_cache.pop(msg_id, None)
                 self.cloud_link_cache.pop(msg_id, None)
-                self.known_ids.discard(msg_id)
 
-        new_unread = collect_new_unread(updates, self.known_ids)
-        if updates or deleted_ids:
+        if active_updates or active_deletes:
             index_by_id = {msg.get("id"): idx for idx, msg in enumerate(self.current_messages) if msg.get("id")}
-            for msg in updates:
+            for msg in active_updates:
                 msg_id = msg.get("id")
                 if not msg_id:
                     continue
@@ -232,6 +217,7 @@ class AuthPollMixin:
             if self.message_list.count() == 0:
                 self._show_message_list()
                 self._clear_detail_view("No messages in this folder.")
+
         if new_unread:
             self._set_status(f"{len(new_unread)} new unread message(s)")
         else:
