@@ -68,9 +68,7 @@ class CompanySearchMixin:
         load_token = self._company_load_token
         if not cached and not showing_cache:
             self._show_message_list()
-            self.current_messages = []
-            self.filtered_messages = []
-            self.message_list.clear()
+            self._set_messages([])
             self._clear_detail_view(f'Loading messages for "{query_key}"...')
         self.workers.submit(
             lambda q=query_key, token=load_token: self._company_messages_worker(q, token),
@@ -430,9 +428,7 @@ class CompanySearchMixin:
         if search_text and not using_override:
             source_messages = [msg for msg in source_messages if self._message_matches_search(msg, search_text)]
 
-        self.current_messages = source_messages
-        self.known_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
-        self._render_message_list()
+        self._set_messages(source_messages)
         if self.message_list.count() > 0:
             self.message_list.setCurrentRow(0)
             self._show_message_list()
