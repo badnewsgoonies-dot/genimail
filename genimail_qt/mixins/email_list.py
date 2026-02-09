@@ -313,10 +313,14 @@ class EmailListMixin:
         if not hasattr(self, "config"):
             return
         history = self.config.get(SEARCH_HISTORY_CONFIG_KEY, []) or []
+        if not isinstance(history, list):
+            history = [history]
         seen = set()
         deduped = []
         for term in history:
-            key = (term or "").strip().lower()
+            if not isinstance(term, str):
+                continue
+            key = term.strip().lower()
             if key and key not in seen:
                 seen.add(key)
                 deduped.append(term.strip())
@@ -328,11 +332,15 @@ class EmailListMixin:
         if not term or not hasattr(self, "config"):
             return
         history = self.config.get(SEARCH_HISTORY_CONFIG_KEY, []) or []
+        if not isinstance(history, list):
+            history = [history]
         # Deduplicate case-insensitively, keeping the newest casing
         deduped = [term]
         seen = {term.lower()}
         for existing in history:
-            key = (existing or "").strip().lower()
+            if not isinstance(existing, str):
+                continue
+            key = existing.strip().lower()
             if key and key not in seen:
                 seen.add(key)
                 deduped.append(existing.strip())

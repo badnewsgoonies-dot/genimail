@@ -132,11 +132,14 @@ class AuthPollMixin:
         migration_key = "migration_full_cache_sync_v1"
         if self.config.get(migration_key):
             return
+        migration_completed = False
         try:
             self.cache.clear_delta_links()
+            migration_completed = True
         except Exception as exc:
             print(f"[MIGRATION] failed to clear delta links: {exc}")
-        self.config.set(migration_key, True)
+        if migration_completed:
+            self.config.set(migration_key, True)
 
     def _start_polling(self):
         if not self.sync_service:
