@@ -61,7 +61,7 @@ class LayoutMixin:
         self.workspace_tabs.addTab(self.internet_tab, "Internet")
         self.workspace_tabs.addTab(self.email_tab, "Email")
         self.workspace_tabs.addTab(self.pdf_tab, "PDF Viewer")
-        self.workspace_tabs.addTab(self.docs_tab, "Docs/Templates")
+        self.workspace_tabs.addTab(self.docs_tab, "Documents")
         self.workspace_tabs.setCurrentWidget(self.email_tab)
         self.workspace_tabs.currentChanged.connect(self._on_workspace_tab_changed)
         self.setCentralWidget(container)
