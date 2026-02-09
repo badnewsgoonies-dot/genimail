@@ -668,6 +668,79 @@ class EmailCache:
             )
         return self._search_company_messages_like(normalized, limit=limit)
 
+    def search_messages(self, search_text, folder_id=None, limit=None):
+        """Search all cached messages by text across subject, body, sender, recipients."""
+        normalized = (search_text or "").strip().lower()
+        if not normalized:
+            return []
+        if self._is_fts_enabled():
+            try:
+                return self._search_messages_fts(normalized, folder_id, limit)
+            except sqlite3.OperationalError as exc:
+                logger.warning("FTS search failed, falling back to LIKE: %s", exc)
+        return self._search_messages_like(normalized, folder_id, limit)
+
+    def _search_messages_fts(self, search_text, folder_id=None, limit=None):
+        fts_query = self._fts_query_from_text(search_text)
+        if not fts_query:
+            return self._search_messages_like(search_text, folder_id, limit)
+        params = []
+        folder_clause = ""
+        if folder_id:
+            folder_clause = " AND m.folder_id = ?"
+            params.append(folder_id)
+        params.append(fts_query)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "\n               LIMIT ?"
+            params.append(int(limit))
+        cur = self.conn.execute(
+            f"""SELECT {self._BASE_MESSAGE_SELECT}
+               FROM messages m
+               JOIN message_search_fts f ON f.message_id = m.id
+               WHERE 1=1{folder_clause}
+                 AND message_search_fts MATCH ?
+               ORDER BY m.received_datetime DESC{limit_clause}""",
+            tuple(params),
+        )
+        return self._rows_to_messages(cur.fetchall())
+
+    def _search_messages_like(self, search_text, folder_id=None, limit=None):
+        like_value = f"%{search_text}%"
+        params = [like_value, like_value, like_value, like_value, like_value, like_value, like_value]
+        folder_clause = ""
+        if folder_id:
+            folder_clause = " AND m.folder_id = ?"
+            params.append(folder_id)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "\n               LIMIT ?"
+            params.append(int(limit))
+        cur = self.conn.execute(
+            f"""SELECT {self._BASE_MESSAGE_SELECT}
+               FROM messages m
+               WHERE (
+                   LOWER(COALESCE(m.subject, '')) LIKE ?
+                   OR LOWER(COALESCE(m.body_preview, '')) LIKE ?
+                   OR LOWER(COALESCE(m.sender_name, '')) LIKE ?
+                   OR LOWER(COALESCE(m.sender_address, '')) LIKE ?
+                   OR EXISTS (
+                       SELECT 1 FROM message_recipients sr
+                       WHERE sr.message_id = m.id AND (
+                           LOWER(COALESCE(sr.recipient_name, '')) LIKE ?
+                           OR LOWER(COALESCE(sr.recipient_address, '')) LIKE ?
+                       )
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM message_bodies mb
+                       WHERE mb.id = m.id AND LOWER(COALESCE(mb.content, '')) LIKE ?
+                   )
+               ){folder_clause}
+               ORDER BY m.received_datetime DESC{limit_clause}""",
+            tuple(params),
+        )
+        return self._rows_to_messages(cur.fetchall())
+
     def label_domain(self, domain, label):
         """Bulk-label all emails from a domain."""
         cur = self.conn.execute(

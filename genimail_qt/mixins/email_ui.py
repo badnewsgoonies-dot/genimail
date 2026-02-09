@@ -1,6 +1,7 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QStringListModel, Qt
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWidgets import (
+    QCompleter,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -39,6 +40,12 @@ class EmailUiMixin:
         self.search_btn.setObjectName("primaryButton")
         search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.search_btn)
+        self._search_completer = QCompleter(self)
+        self._search_completer.setModel(QStringListModel([], self))
+        self._search_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._search_completer.setFilterMode(Qt.MatchContains)
+        self._search_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.search_input.setCompleter(self._search_completer)
         left_layout.addLayout(search_row)
         left_layout.addWidget(QLabel("Folders"))
         self.folder_buttons_widget = QWidget()
@@ -182,6 +189,8 @@ class EmailUiMixin:
         self.forward_btn.clicked.connect(lambda: self._open_compose_dialog("forward"))
         self._refresh_company_sidebar()
         self._show_message_list()
+        if hasattr(self, "_load_search_history"):
+            self._load_search_history()
         return tab
 
     def _build_attachment_thumbnails(self):

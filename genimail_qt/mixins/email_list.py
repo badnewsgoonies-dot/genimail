@@ -3,12 +3,13 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPen
 from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton, QStyledItemDelegate, QStyle
 
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
-from genimail.constants import EMAIL_COMPANY_FETCH_PER_FOLDER, EMAIL_LIST_FETCH_TOP
+from genimail.constants import EMAIL_COMPANY_FETCH_PER_FOLDER, EMAIL_LIST_FETCH_TOP, SEARCH_HISTORY_MAX_ITEMS
 from genimail.domain.helpers import format_date, format_size, strip_html
 from genimail_qt.constants import (
     ATTACHMENT_THUMBNAIL_MAX_INITIAL,
     ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS,
     COMPANY_COLOR_STRIPE_WIDTH,
+    SEARCH_HISTORY_CONFIG_KEY,
 )
 from genimail_qt.webview_utils import (
     is_inline_attachment,
@@ -193,20 +194,27 @@ class EmailListMixin:
 
         # Cache-first: show cached messages instantly before network fetch.
         has_cached = False
-        if not search_text:
-            try:
+        if search_text:
+            self._record_search_history(search_text)
+        try:
+            if search_text:
+                cached = self.cache.search_messages(search_text, folder_id=folder_id, limit=EMAIL_LIST_FETCH_TOP)
+            else:
                 cached = self.cache.get_messages(folder_id, limit=EMAIL_LIST_FETCH_TOP)
-                if cached:
-                    folder_key = self._folder_key_for_id(folder_id)
-                    enriched = [self._with_folder_meta(msg, folder_id, folder_key) for msg in cached]
-                    self._set_messages(enriched)
-                    if self.message_list.count() > 0:
-                        self.message_list.setCurrentRow(0)
-                    has_cached = True
-            except Exception:
-                pass
+            if cached:
+                folder_key = self._folder_key_for_id(folder_id)
+                enriched = [self._with_folder_meta(msg, folder_id, folder_key) for msg in cached]
+                self._set_messages(enriched)
+                if self.message_list.count() > 0:
+                    self.message_list.setCurrentRow(0)
+                has_cached = True
+        except Exception:
+            pass
 
-        self._set_status("Refreshing..." if has_cached else "Loading messages...")
+        if search_text:
+            self._set_status("Refreshing..." if has_cached else "Searching online...")
+        else:
+            self._set_status("Refreshing..." if has_cached else "Loading messages...")
         self.workers.submit(
             lambda fid=folder_id, text=search_text, token=load_token: self._messages_worker(fid, text, token),
             self._on_messages_loaded,
@@ -226,8 +234,8 @@ class EmailListMixin:
             messages, _ = self.graph.get_messages(folder_id=folder_id, top=EMAIL_LIST_FETCH_TOP)
             search_lower = search_text.strip().lower()
             messages = [msg for msg in (messages or []) if self._message_matches_search(msg, search_lower)]
-        # Persist non-search results to cache for instant future folder loads.
-        if messages and not search_text:
+        # Persist results to cache for instant future loads and FTS search.
+        if messages:
             try:
                 self.cache.save_messages(messages, folder_id)
             except Exception:
@@ -296,6 +304,41 @@ class EmailListMixin:
             if (source.get("id") or "").strip().lower() == target_id:
                 return source.get("key") or target_id
         return target_id
+
+    # ------------------------------------------------------------------
+    # Search history
+    # ------------------------------------------------------------------
+
+    def _load_search_history(self):
+        if not hasattr(self, "config"):
+            return
+        history = self.config.get(SEARCH_HISTORY_CONFIG_KEY, []) or []
+        seen = set()
+        deduped = []
+        for term in history:
+            key = (term or "").strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                deduped.append(term.strip())
+        if hasattr(self, "_search_completer"):
+            self._search_completer.model().setStringList(deduped)
+
+    def _record_search_history(self, search_text):
+        term = (search_text or "").strip()
+        if not term or not hasattr(self, "config"):
+            return
+        history = self.config.get(SEARCH_HISTORY_CONFIG_KEY, []) or []
+        # Deduplicate case-insensitively, keeping the newest casing
+        deduped = [term]
+        seen = {term.lower()}
+        for existing in history:
+            key = (existing or "").strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                deduped.append(existing.strip())
+        deduped = deduped[:SEARCH_HISTORY_MAX_ITEMS]
+        self.config.set(SEARCH_HISTORY_CONFIG_KEY, deduped)
+        self._load_search_history()
 
     # ------------------------------------------------------------------
     # Message list rendering
