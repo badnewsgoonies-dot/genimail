@@ -120,9 +120,11 @@ class PdfUiMixin:
         tp_layout.addWidget(self._pdf_points_label)
 
         self._pdf_close_shape_btn = QPushButton("Close Shape")
+        self._pdf_close_wall_btn = QPushButton("Close Wall")
         self._pdf_undo_btn = QPushButton("Undo Point")
         self._pdf_clear_btn = QPushButton("Clear")
         tp_layout.addWidget(self._pdf_close_shape_btn)
+        tp_layout.addWidget(self._pdf_close_wall_btn)
         tp_layout.addWidget(self._pdf_undo_btn)
         tp_layout.addWidget(self._pdf_clear_btn)
 
@@ -191,6 +193,7 @@ class PdfUiMixin:
         zoom_out_btn.clicked.connect(self._on_pdf_zoom_out)
 
         self._pdf_close_shape_btn.clicked.connect(self._on_pdf_close_shape)
+        self._pdf_close_wall_btn.clicked.connect(self._on_pdf_close_wall)
         self._pdf_undo_btn.clicked.connect(self._on_pdf_undo_point)
         self._pdf_clear_btn.clicked.connect(self._on_pdf_clear_polygon)
         self._pdf_remove_room_btn.clicked.connect(self._on_pdf_remove_room)

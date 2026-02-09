@@ -27,6 +27,7 @@ class SavedRoom:
     floor_sqft: float
     points: list = field(default_factory=list)
     page_index: int = 0
+    is_wall: bool = False
 
 
 class PdfMixin:
@@ -339,6 +340,48 @@ class PdfMixin:
         self._rebuild_rooms_list()
         self._update_totals()
 
+    def _on_pdf_close_wall(self):
+        if not self._poly_points or len(self._poly_points) < 2:
+            if hasattr(self, "toaster"):
+                self.toaster.show("Need at least 2 points for a wall.", kind="error")
+            return
+        view = self._current_pdf_view()
+
+        # Sum the linear distance along all consecutive points
+        cal = self._cal_factor
+        total_ft = 0.0
+        for i in range(1, len(self._poly_points)):
+            x0, y0 = self._poly_points[i - 1]
+            x1, y1 = self._poly_points[i]
+            dx = (x1 - x0) / 72.0 * cal / 12.0
+            dy = (y1 - y0) / 72.0 * cal / 12.0
+            total_ft += math.hypot(dx, dy)
+
+        wall_height = 8.0
+        try:
+            wall_height = parse_length_to_feet(self._pdf_wall_height_input.text())
+        except Exception:
+            pass
+
+        wall_sqft = total_ft * wall_height
+
+        room = SavedRoom(
+            points_count=len(self._poly_points),
+            perimeter_feet=total_ft,
+            wall_sqft=wall_sqft,
+            floor_sqft=0.0,
+            points=list(self._poly_points),
+            page_index=view.current_page if view else 0,
+            is_wall=True,
+        )
+        self._saved_rooms.append(room)
+
+        self._poly_points = []
+        self._update_measurement_labels()
+        self._redraw_all_room_overlays()
+        self._rebuild_rooms_list()
+        self._update_totals()
+
     def _on_pdf_undo_point(self):
         if not self._poly_points:
             return
@@ -364,7 +407,10 @@ class PdfMixin:
     def _rebuild_rooms_list(self):
         self._pdf_rooms_list.clear()
         for i, room in enumerate(self._saved_rooms, 1):
-            text = f"{i}. {room.perimeter_feet:.1f} lf | {room.wall_sqft:.0f} wall | {room.floor_sqft:.0f} floor"
+            if room.is_wall:
+                text = f"{i}. Wall {room.perimeter_feet:.1f} lf | {room.wall_sqft:.0f} sqft"
+            else:
+                text = f"{i}. {room.perimeter_feet:.1f} lf | {room.wall_sqft:.0f} wall | {room.floor_sqft:.0f} floor"
             self._pdf_rooms_list.addItem(text)
 
     def _update_totals(self):
@@ -428,10 +474,16 @@ class PdfMixin:
             pts = room.points
             for pt in pts:
                 view.add_vertex_dot(pt[0], pt[1])
-            for i in range(len(pts)):
-                x0, y0 = pts[i]
-                x1, y1 = pts[(i + 1) % len(pts)]
-                view.add_edge_line(x0, y0, x1, y1)
+            if room.is_wall:
+                # Open polyline — no closing edge
+                for i in range(1, len(pts)):
+                    view.add_edge_line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+            else:
+                # Closed polygon
+                for i in range(len(pts)):
+                    x0, y0 = pts[i]
+                    x1, y1 = pts[(i + 1) % len(pts)]
+                    view.add_edge_line(x0, y0, x1, y1)
         # Also redraw current in-progress polygon
         if self._poly_points:
             for pt in self._poly_points:
