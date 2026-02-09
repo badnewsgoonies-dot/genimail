@@ -494,11 +494,22 @@ class CompanyMixin:
         color_map = getattr(self, "_company_color_map", {})
         if not color_map:
             return None
-        address = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
-        if "@" not in address:
-            return None
-        domain = address.split("@", 1)[1]
-        return color_map.get(domain)
+        addresses = []
+        sender = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
+        if sender:
+            addresses.append(sender)
+        for field in ("toRecipients", "ccRecipients"):
+            for entry in msg.get(field) or []:
+                addr = ((entry or {}).get("emailAddress", {}).get("address") or "").strip().lower()
+                if addr:
+                    addresses.append(addr)
+        for address in addresses:
+            if "@" not in address:
+                continue
+            color = color_map.get(address.split("@", 1)[1])
+            if color:
+                return color
+        return None
 
     def _check_detail_message_visibility(self):
         self._ensure_detail_message_visible()

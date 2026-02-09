@@ -220,7 +220,7 @@ class GraphClient:
         else:
             url = f"{GRAPH_BASE}/me/mailFolders/{folder_id}/messages/delta"
             params = {
-                "$select": "id,subject,from,toRecipients,receivedDateTime,"
+                "$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,"
                 "isRead,hasAttachments,bodyPreview,importance",
             }
 

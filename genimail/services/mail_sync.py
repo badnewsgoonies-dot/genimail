@@ -9,9 +9,13 @@ class MailSyncService:
         existing = self.cache.get_delta_link(folder_id)
         if existing:
             return existing
-        _, delta_link, _ = self.graph.get_messages_delta(folder_id=folder_id)
+        messages, delta_link, deleted_ids = self.graph.get_messages_delta(folder_id=folder_id)
         if delta_link:
             self.cache.save_delta_link(folder_id, delta_link)
+        if messages:
+            self.cache.save_messages(messages, folder_id)
+        if deleted_ids:
+            self.cache.delete_messages(deleted_ids)
         return delta_link
 
     def fetch_recent_messages(self, folder_id="inbox", top=50):

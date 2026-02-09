@@ -714,6 +714,11 @@ class EmailCache:
             cur = self.conn.execute("SELECT COUNT(*) as count FROM messages")
         return cur.fetchone()["count"]
 
+    def clear_delta_links(self):
+        """Remove all stored delta links, forcing a full re-sync on next init."""
+        self.conn.execute("DELETE FROM sync_state")
+        self.conn.commit()
+
     def get_delta_link(self, folder_id):
         """Get stored delta link for a folder."""
         cur = self.conn.execute("SELECT delta_link FROM sync_state WHERE folder_id = ?", (folder_id,))

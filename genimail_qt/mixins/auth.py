@@ -118,7 +118,25 @@ class AuthPollMixin:
         self._set_status(f"Connected as {self.current_user_email}")
         self._populate_folders(result.get("folders") or [])
         self._refresh_company_sidebar()
+        self._migrate_full_cache_sync()
         self._start_polling()
+
+    def _migrate_full_cache_sync(self):
+        """One-time migration: clear delta links so the next delta init
+        re-downloads all messages into the SQLite cache.
+
+        Previous versions discarded the messages fetched during delta
+        initialization.  Clearing the stored links forces a fresh full
+        fetch that now gets saved properly.
+        """
+        migration_key = "migration_full_cache_sync_v1"
+        if self.config.get(migration_key):
+            return
+        try:
+            self.cache.clear_delta_links()
+        except Exception as exc:
+            print(f"[MIGRATION] failed to clear delta links: {exc}")
+        self.config.set(migration_key, True)
 
     def _start_polling(self):
         if not self.sync_service:
@@ -146,9 +164,14 @@ class AuthPollMixin:
             print("[DELTA] initialization warnings:")
             for line in errors:
                 print(f"[DELTA] {line}")
+            self._poll_once()
             return
 
         self._set_status(f"Connected. Delta sync ready ({len(ready)} folder(s)).")
+
+        # Immediate catchup sync so the cache is fresh for company tabs
+        # instead of waiting for the first 30-second poll timer tick.
+        self._poll_once()
 
     def _poll_once(self):
         if not self.sync_service:

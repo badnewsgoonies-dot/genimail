@@ -3,7 +3,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPen
 from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton, QStyledItemDelegate, QStyle
 
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
-from genimail.constants import EMAIL_LIST_FETCH_TOP
+from genimail.constants import EMAIL_COMPANY_FETCH_PER_FOLDER, EMAIL_LIST_FETCH_TOP
 from genimail.domain.helpers import format_date, format_size, strip_html
 from genimail_qt.constants import (
     ATTACHMENT_THUMBNAIL_MAX_INITIAL,
@@ -43,10 +43,22 @@ class CompanyColorDelegate(QStyledItemDelegate):
     def _company_color_for_msg(msg, color_map):
         if not color_map:
             return None
-        address = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
-        if "@" not in address:
-            return None
-        return color_map.get(address.split("@", 1)[1])
+        addresses = []
+        sender = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
+        if sender:
+            addresses.append(sender)
+        for field in ("toRecipients", "ccRecipients"):
+            for entry in msg.get(field) or []:
+                addr = ((entry or {}).get("emailAddress", {}).get("address") or "").strip().lower()
+                if addr:
+                    addresses.append(addr)
+        for address in addresses:
+            if "@" not in address:
+                continue
+            color = color_map.get(address.split("@", 1)[1])
+            if color:
+                return color
+        return None
 
     def sizeHint(self, option, index):
         base = super().sizeHint(option, index)
@@ -98,7 +110,6 @@ class CompanyColorDelegate(QStyledItemDelegate):
 
         # Date
         date_font = QFont(base_font)
-        date_font.setPointSize(base_font.pointSize())
         fm_date = QFontMetrics(date_font)
         painter.setFont(date_font)
         painter.setPen(QColor(_COLOR_DATE))
@@ -184,7 +195,7 @@ class EmailListMixin:
         has_cached = False
         if not search_text:
             try:
-                cached = self.cache.get_messages(folder_id)
+                cached = self.cache.get_messages(folder_id, limit=EMAIL_LIST_FETCH_TOP)
                 if cached:
                     folder_key = self._folder_key_for_id(folder_id)
                     enriched = [self._with_folder_meta(msg, folder_id, folder_key) for msg in cached]

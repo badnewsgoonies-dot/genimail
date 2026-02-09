@@ -434,7 +434,8 @@ def test_company_load_token_prevents_stale_results():
 
     CompanySearchMixin._on_company_messages_loaded(probe, payload)
 
-    assert probe.company_query_cache["acme.com"]["messages"] == [{"id": "fresh"}]
+    # Stale results (wrong token) are fully discarded — no cache update, no display update.
+    assert "acme.com" not in probe.company_query_cache
     assert probe.apply_calls == 0
     assert probe.company_result_messages == ["stale"]
 

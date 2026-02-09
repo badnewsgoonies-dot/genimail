@@ -70,7 +70,6 @@ class CompanySearchMixin:
             self._show_message_list()
             self._set_messages([])
             self._clear_detail_view(f'Loading messages for "{query_key}"...')
-        self._set_company_tabs_enabled(False)
         self.workers.submit(
             lambda q=query_key, token=load_token: self._company_messages_worker(q, token),
             self._on_company_messages_loaded,
@@ -336,13 +335,6 @@ class CompanySearchMixin:
     def _on_company_messages_loaded(self, payload):
         query = (payload.get("query") or "").strip().lower()
         self.company_query_inflight.discard(query)
-        self._set_company_tabs_enabled(True)
-        self.company_query_cache[query] = {
-            "messages": list(payload.get("messages") or []),
-            "errors": list(payload.get("errors") or []),
-            "fetched_at": float(payload.get("fetched_at") or time.time()),
-        }
-        self._evict_company_cache()
 
         token = payload.get("token")
         current_token = getattr(self, "_company_load_token", None)
@@ -352,7 +344,18 @@ class CompanySearchMixin:
         if query != (self.company_filter_domain or "").strip().lower():
             return
 
-        self.company_result_messages = payload.get("messages") or []
+        # Re-read from SQLite cache rather than using the API results directly.
+        # The worker already saved its results to cache.  Re-reading gives us
+        # the full set (delta-populated + API-refreshed) instead of only the
+        # subset that the Graph API $search returned.
+        refreshed = CompanySearchMixin._load_company_messages_from_cache(self, query)
+        self.company_result_messages = refreshed if refreshed else (payload.get("messages") or [])
+        self.company_query_cache[query] = {
+            "messages": list(self.company_result_messages),
+            "errors": list(payload.get("errors") or []),
+            "fetched_at": float(payload.get("fetched_at") or time.time()),
+        }
+        self._evict_company_cache()
         self._company_search_override = None
         self.company_folder_filter = self.company_folder_filter or "all"
         self._apply_company_folder_filter()
@@ -373,7 +376,6 @@ class CompanySearchMixin:
 
     def _on_company_messages_error(self, query, trace_text):
         self.company_query_inflight.discard((query or "").strip().lower())
-        self._set_company_tabs_enabled(True)
         if (query or "").strip().lower() != (self.company_filter_domain or "").strip().lower():
             return
         self._set_status(f'Unable to refresh "{query}" right now.')
