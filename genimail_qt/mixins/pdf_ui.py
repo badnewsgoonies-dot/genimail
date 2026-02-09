@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QPushButton,
     QLineEdit,
     QRadioButton,
@@ -107,27 +108,16 @@ class PdfUiMixin:
         self._pdf_wall_height_input.setPlaceholderText("e.g. 8ft")
         tp_layout.addWidget(self._pdf_wall_height_input)
 
-        # Results
+        # Current shape section
         sep3 = QLabel("")
         sep3.setFixedHeight(1)
         sep3.setStyleSheet("background: #dfe3ea;")
         tp_layout.addWidget(sep3)
-        tp_layout.addWidget(QLabel("Results:"))
+        tp_layout.addWidget(QLabel("Current Shape:"))
 
         self._pdf_points_label = QLabel("Points: 0")
-        self._pdf_perimeter_label = QLabel("Perimeter: \u2014")
-        self._pdf_wall_sqft_label = QLabel("Wall Sqft: \u2014")
-        self._pdf_floor_sqft_label = QLabel("Floor Sqft: \u2014")
-        for lbl in (self._pdf_points_label, self._pdf_perimeter_label,
-                     self._pdf_wall_sqft_label, self._pdf_floor_sqft_label):
-            lbl.setObjectName("pdfResultLabel")
-            tp_layout.addWidget(lbl)
-
-        # Action buttons
-        sep4 = QLabel("")
-        sep4.setFixedHeight(1)
-        sep4.setStyleSheet("background: #dfe3ea;")
-        tp_layout.addWidget(sep4)
+        self._pdf_points_label.setObjectName("pdfResultLabel")
+        tp_layout.addWidget(self._pdf_points_label)
 
         self._pdf_close_shape_btn = QPushButton("Close Shape")
         self._pdf_undo_btn = QPushButton("Undo Point")
@@ -135,6 +125,47 @@ class PdfUiMixin:
         tp_layout.addWidget(self._pdf_close_shape_btn)
         tp_layout.addWidget(self._pdf_undo_btn)
         tp_layout.addWidget(self._pdf_clear_btn)
+
+        # Rooms list
+        sep4 = QLabel("")
+        sep4.setFixedHeight(1)
+        sep4.setStyleSheet("background: #dfe3ea;")
+        tp_layout.addWidget(sep4)
+        tp_layout.addWidget(QLabel("Rooms:"))
+
+        self._pdf_rooms_list = QListWidget()
+        self._pdf_rooms_list.setObjectName("pdfRoomsList")
+        self._pdf_rooms_list.setMaximumHeight(160)
+        self._pdf_rooms_list.setAlternatingRowColors(True)
+        tp_layout.addWidget(self._pdf_rooms_list)
+
+        # Totals
+        sep5 = QLabel("")
+        sep5.setFixedHeight(1)
+        sep5.setStyleSheet("background: #dfe3ea;")
+        tp_layout.addWidget(sep5)
+        tp_layout.addWidget(QLabel("Totals:"))
+
+        self._pdf_total_perim_label = QLabel("Perimeter: \u2014")
+        self._pdf_total_wall_label = QLabel("Wall Sqft: \u2014")
+        self._pdf_total_floor_label = QLabel("Floor Sqft: \u2014")
+        for lbl in (self._pdf_total_perim_label, self._pdf_total_wall_label,
+                     self._pdf_total_floor_label):
+            lbl.setObjectName("pdfResultLabel")
+            tp_layout.addWidget(lbl)
+
+        # Room management buttons
+        sep6 = QLabel("")
+        sep6.setFixedHeight(1)
+        sep6.setStyleSheet("background: #dfe3ea;")
+        tp_layout.addWidget(sep6)
+
+        self._pdf_remove_room_btn = QPushButton("Remove Selected")
+        self._pdf_clear_all_btn = QPushButton("Clear All")
+        self._pdf_copy_totals_btn = QPushButton("Copy Totals")
+        tp_layout.addWidget(self._pdf_remove_room_btn)
+        tp_layout.addWidget(self._pdf_clear_all_btn)
+        tp_layout.addWidget(self._pdf_copy_totals_btn)
 
         tp_layout.addStretch(1)
 
@@ -162,6 +193,9 @@ class PdfUiMixin:
         self._pdf_close_shape_btn.clicked.connect(self._on_pdf_close_shape)
         self._pdf_undo_btn.clicked.connect(self._on_pdf_undo_point)
         self._pdf_clear_btn.clicked.connect(self._on_pdf_clear_polygon)
+        self._pdf_remove_room_btn.clicked.connect(self._on_pdf_remove_room)
+        self._pdf_clear_all_btn.clicked.connect(self._on_pdf_clear_all_rooms)
+        self._pdf_copy_totals_btn.clicked.connect(self._on_pdf_copy_totals)
 
         self._pdf_tool_group.idToggled.connect(self._on_pdf_tool_changed)
 

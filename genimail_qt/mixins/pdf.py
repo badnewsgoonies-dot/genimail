@@ -1,10 +1,11 @@
 import math
 import os
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QLabel, QMessageBox
 
 from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
@@ -18,6 +19,16 @@ _TOOL_CALIBRATE = 1
 _TOOL_FLOORPLAN = 2
 
 
+@dataclass
+class SavedRoom:
+    points_count: int
+    perimeter_feet: float
+    wall_sqft: float
+    floor_sqft: float
+    points: list = field(default_factory=list)
+    page_index: int = 0
+
+
 class PdfMixin:
     # ── Measurement state (per-session, cleared on page/doc change) ──
     _poly_points = None  # [(x_pt, y_pt), ...]
@@ -27,6 +38,7 @@ class PdfMixin:
 
     def _init_pdf_measurement_state(self):
         self._poly_points = []
+        self._saved_rooms = []
         self._cal_factor = 1.0
         self._has_cal = False
         self._cal_start = None
@@ -137,6 +149,7 @@ class PdfMixin:
     def _on_pdf_page_changed(self, current, total):
         self._update_pdf_page_label(current, total)
         self._clear_polygon()
+        self._redraw_all_room_overlays()
 
     def _update_pdf_page_label(self, current, total):
         if hasattr(self, "_pdf_page_label"):
@@ -185,6 +198,8 @@ class PdfMixin:
         total = view.page_count
         self._update_pdf_page_label(0, total)
         self._update_measurement_labels()
+        self._rebuild_rooms_list()
+        self._update_totals()
         # Ensure tool mode click state matches current radio
         tool_id = self._pdf_tool_group.checkedId()
         click_enabled = tool_id in (_TOOL_CALIBRATE, _TOOL_FLOORPLAN)
@@ -282,7 +297,7 @@ class PdfMixin:
         if self._poly_points is None:
             self._poly_points = []
         self._poly_points.append((x_pt, y_pt))
-        view.redraw_overlays(self._poly_points)
+        self._redraw_all_room_overlays()
         self._update_measurement_labels()
 
     def _on_pdf_close_shape(self):
@@ -292,13 +307,7 @@ class PdfMixin:
             return
         view = self._current_pdf_view()
 
-        # Close the polygon visually
-        if view and len(self._poly_points) >= 3:
-            first = self._poly_points[0]
-            last = self._poly_points[-1]
-            view.add_edge_line(last[0], last[1], first[0], first[1])
-
-        # Convert PDF points → real-world feet
+        # Compute room measurements
         cal = self._cal_factor
         points_feet = [(x / 72.0 * cal / 12.0, y / 72.0 * cal / 12.0) for x, y in self._poly_points]
         result = compute_floor_plan(points_feet, scale_factor=1.0)
@@ -312,17 +321,29 @@ class PdfMixin:
         wall_sqft = result.perimeter_feet * wall_height
         floor_sqft = result.floor_area_sqft
 
-        self._pdf_perimeter_label.setText(f"Perimeter: {result.perimeter_feet:.1f} ft")
-        self._pdf_wall_sqft_label.setText(f"Wall Sqft: {wall_sqft:.1f}")
-        self._pdf_floor_sqft_label.setText(f"Floor Sqft: {floor_sqft:.1f}")
+        # Save room
+        room = SavedRoom(
+            points_count=len(self._poly_points),
+            perimeter_feet=result.perimeter_feet,
+            wall_sqft=wall_sqft,
+            floor_sqft=floor_sqft,
+            points=list(self._poly_points),
+            page_index=view.current_page if view else 0,
+        )
+        self._saved_rooms.append(room)
+
+        # Reset current polygon for next room (overlays redrawn to show saved rooms)
+        self._poly_points = []
+        self._update_measurement_labels()
+        self._redraw_all_room_overlays()
+        self._rebuild_rooms_list()
+        self._update_totals()
 
     def _on_pdf_undo_point(self):
         if not self._poly_points:
             return
         self._poly_points.pop()
-        view = self._current_pdf_view()
-        if view:
-            view.redraw_overlays(self._poly_points)
+        self._redraw_all_room_overlays()
         self._update_measurement_labels()
 
     def _on_pdf_clear_polygon(self):
@@ -331,18 +352,94 @@ class PdfMixin:
     def _clear_polygon(self):
         self._poly_points = []
         self._cal_start = None
-        view = self._current_pdf_view()
-        if view:
-            view.clear_overlays()
+        self._redraw_all_room_overlays()
         self._update_measurement_labels()
 
     def _update_measurement_labels(self):
         n = len(self._poly_points) if self._poly_points else 0
         self._pdf_points_label.setText(f"Points: {n}")
-        if n < 3:
-            self._pdf_perimeter_label.setText("Perimeter: \u2014")
-            self._pdf_wall_sqft_label.setText("Wall Sqft: \u2014")
-            self._pdf_floor_sqft_label.setText("Floor Sqft: \u2014")
+
+    # ── Room accumulation ─────────────────────────────────────────
+
+    def _rebuild_rooms_list(self):
+        self._pdf_rooms_list.clear()
+        for i, room in enumerate(self._saved_rooms, 1):
+            text = f"{i}. {room.perimeter_feet:.1f} lf | {room.wall_sqft:.0f} wall | {room.floor_sqft:.0f} floor"
+            self._pdf_rooms_list.addItem(text)
+
+    def _update_totals(self):
+        if not self._saved_rooms:
+            self._pdf_total_perim_label.setText("Perimeter: \u2014")
+            self._pdf_total_wall_label.setText("Wall Sqft: \u2014")
+            self._pdf_total_floor_label.setText("Floor Sqft: \u2014")
+            return
+        total_perim = sum(r.perimeter_feet for r in self._saved_rooms)
+        total_wall = sum(r.wall_sqft for r in self._saved_rooms)
+        total_floor = sum(r.floor_sqft for r in self._saved_rooms)
+        self._pdf_total_perim_label.setText(f"Perimeter: {total_perim:.1f} ft")
+        self._pdf_total_wall_label.setText(f"Wall Sqft: {total_wall:,.0f}")
+        self._pdf_total_floor_label.setText(f"Floor Sqft: {total_floor:,.0f}")
+
+    def _on_pdf_remove_room(self):
+        row = self._pdf_rooms_list.currentRow()
+        if row < 0 or row >= len(self._saved_rooms):
+            return
+        self._saved_rooms.pop(row)
+        self._rebuild_rooms_list()
+        self._update_totals()
+        self._redraw_all_room_overlays()
+
+    def _on_pdf_clear_all_rooms(self):
+        self._saved_rooms.clear()
+        self._poly_points = []
+        view = self._current_pdf_view()
+        if view:
+            view.clear_overlays()
+        self._rebuild_rooms_list()
+        self._update_totals()
+        self._update_measurement_labels()
+
+    def _on_pdf_copy_totals(self):
+        if not self._saved_rooms:
+            return
+        total_perim = sum(r.perimeter_feet for r in self._saved_rooms)
+        total_wall = sum(r.wall_sqft for r in self._saved_rooms)
+        total_floor = sum(r.floor_sqft for r in self._saved_rooms)
+        lines = [f"Rooms: {len(self._saved_rooms)}"]
+        for i, room in enumerate(self._saved_rooms, 1):
+            lines.append(f"  {i}. {room.perimeter_feet:.1f} lf | {room.wall_sqft:.0f} wall sqft | {room.floor_sqft:.0f} floor sqft")
+        lines.append("Totals:")
+        lines.append(f"  Perimeter: {total_perim:.1f} ft")
+        lines.append(f"  Wall Sqft: {total_wall:,.0f}")
+        lines.append(f"  Floor Sqft: {total_floor:,.0f}")
+        QApplication.clipboard().setText("\n".join(lines))
+        if hasattr(self, "toaster"):
+            self.toaster.show("Totals copied to clipboard", kind="success")
+
+    def _redraw_all_room_overlays(self):
+        view = self._current_pdf_view()
+        if not view:
+            return
+        view.clear_overlays()
+        current_page = view.current_page
+        for room in self._saved_rooms:
+            if room.page_index != current_page:
+                continue
+            pts = room.points
+            for pt in pts:
+                view.add_vertex_dot(pt[0], pt[1])
+            for i in range(len(pts)):
+                x0, y0 = pts[i]
+                x1, y1 = pts[(i + 1) % len(pts)]
+                view.add_edge_line(x0, y0, x1, y1)
+        # Also redraw current in-progress polygon
+        if self._poly_points:
+            for pt in self._poly_points:
+                view.add_vertex_dot(pt[0], pt[1])
+            for i in range(1, len(self._poly_points)):
+                x0, y0 = self._poly_points[i - 1]
+                x1, y1 = self._poly_points[i]
+                view.add_edge_line(x0, y0, x1, y1)
 
     # ── WebEngine support (used by email preview and other mixins) ──
 
