@@ -483,6 +483,42 @@ def test_reset_company_state_clears_all_fields():
     assert probe.badge_updates == 1
 
 
+def test_sync_company_tab_checks_uses_domain_only_and_never_checks_empty_state():
+    from genimail_qt.mixins.company import CompanyMixin
+
+    class _Btn:
+        def __init__(self):
+            self.checked = None
+            self.blocks = []
+
+        def blockSignals(self, value):
+            self.blocks.append(bool(value))
+
+        def setChecked(self, value):
+            self.checked = bool(value)
+
+    class _Probe:
+        def __init__(self):
+            self.company_filter_domain = "acme.com"
+            self.company_tab_buttons = {
+                None: _Btn(),  # Legacy key should not become checked when no filter is active.
+                "acme.com": _Btn(),
+                "other.com": _Btn(),
+            }
+
+    probe = _Probe()
+    CompanyMixin._sync_company_tab_checks(probe)
+    assert probe.company_tab_buttons[None].checked is False
+    assert probe.company_tab_buttons["acme.com"].checked is True
+    assert probe.company_tab_buttons["other.com"].checked is False
+
+    probe.company_filter_domain = None
+    CompanyMixin._sync_company_tab_checks(probe)
+    assert probe.company_tab_buttons[None].checked is False
+    assert probe.company_tab_buttons["acme.com"].checked is False
+    assert probe.company_tab_buttons["other.com"].checked is False
+
+
 def test_company_search_falls_back_to_local_on_failure():
     from genimail_qt.mixins.email_company_search import CompanySearchMixin
     from genimail_qt.mixins.email_list import EmailListMixin

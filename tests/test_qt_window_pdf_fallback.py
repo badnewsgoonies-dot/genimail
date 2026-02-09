@@ -4,66 +4,39 @@ from genimail_qt.mixins import pdf as pdf_module
 from genimail_qt.window import GeniMailQtWindow
 
 
-class _FakeWindow:
-    def __init__(self, qt_result=None, web_result=None, qt_error=None, web_error=None):
-        self.calls = []
-        self.qt_result = qt_result
-        self.web_result = web_result
-        self.qt_error = qt_error
-        self.web_error = web_error
-
-    def _create_qtpdf_widget(self, path):
-        self.calls.append(("qt", path))
-        if self.qt_error:
-            raise self.qt_error
-        return self.qt_result
-
-    def _create_webengine_pdf_widget(self, path):
-        self.calls.append(("web", path))
-        if self.web_error:
-            raise self.web_error
-        return self.web_result
+class _Signal:
+    def connect(self, fn):
+        pass
 
 
-def test_create_pdf_widget_prefers_qtpdf(monkeypatch):
-    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
-    fake = _FakeWindow(qt_result="qt-view", web_result="web-view")
+class _FakePdfGraphicsView:
+    """Stub for PdfGraphicsView used in test isolation."""
+    pointClicked = _Signal()
+    pageChanged = _Signal()
 
-    result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
+    def __init__(self):
+        self._path = None
 
-    assert result == "qt-view"
-    assert fake.calls == [("qt", "sample.pdf")]
-
-
-def test_create_pdf_widget_falls_back_to_webengine(monkeypatch):
-    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
-    fake = _FakeWindow(qt_error=RuntimeError("qt failed"), web_result="web-view")
-
-    result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
-
-    assert result == "web-view"
-    assert fake.calls == [("qt", "sample.pdf"), ("web", "sample.pdf")]
+    def open_document(self, path):
+        self._path = path
 
 
-def test_create_pdf_widget_uses_webengine_when_qtpdf_unavailable(monkeypatch):
-    monkeypatch.setattr(pdf_module, "HAS_QTPDF", False)
-    fake = _FakeWindow(qt_result="qt-view", web_result="web-view")
+class _FakeSelf:
+    """Minimal stub providing the methods _create_pdf_widget references."""
+    def _on_pdf_point_clicked(self, x, y):
+        pass
 
-    result = GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
-
-    assert result == "web-view"
-    assert fake.calls == [("web", "sample.pdf")]
+    def _on_pdf_page_changed(self, current, total):
+        pass
 
 
-def test_create_pdf_widget_raises_when_all_renderers_fail(monkeypatch):
-    monkeypatch.setattr(pdf_module, "HAS_QTPDF", True)
-    fake = _FakeWindow(
-        qt_error=RuntimeError("qt failed"),
-        web_error=RuntimeError("web failed"),
-    )
+def test_create_pdf_widget_returns_graphics_view(monkeypatch):
+    """After the renderer swap, _create_pdf_widget always returns a PdfGraphicsView."""
+    fake_view = _FakePdfGraphicsView()
+    monkeypatch.setattr(pdf_module, "PdfGraphicsView", lambda: fake_view)
 
-    with pytest.raises(RuntimeError) as exc:
-        GeniMailQtWindow._create_pdf_widget(fake, "sample.pdf")
+    fake_self = _FakeSelf()
+    result = GeniMailQtWindow._create_pdf_widget(fake_self, "sample.pdf")
 
-    assert "QtPdf" in str(exc.value)
-    assert "WebEngine" in str(exc.value)
+    assert result is fake_view
+    assert fake_view._path == "sample.pdf"

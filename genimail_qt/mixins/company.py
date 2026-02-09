@@ -183,12 +183,6 @@ class CompanyMixin:
                 widget.deleteLater()
 
         self.company_tab_buttons = {}
-        all_btn = QPushButton("All Companies")
-        all_btn.setObjectName("companyTabButton")
-        all_btn.setCheckable(True)
-        all_btn.clicked.connect(lambda _checked=False: self._on_company_tab_clicked(None))
-        self.company_tabs_layout.addWidget(all_btn)
-        self.company_tab_buttons[None] = all_btn
 
         for entry in self.company_entries_visible:
             btn = QPushButton(entry["label"])
@@ -243,10 +237,10 @@ class CompanyMixin:
         self.company_folder_filter_layout.addStretch(1)
 
     def _sync_company_tab_checks(self):
-        selected = (self.company_filter_domain or "").strip().lower() or None
+        selected = (self.company_filter_domain or "").strip().lower()
         for domain, btn in getattr(self, "company_tab_buttons", {}).items():
             btn.blockSignals(True)
-            btn.setChecked(domain == selected if domain else selected is None)
+            btn.setChecked(bool(selected) and (domain or "").strip().lower() == selected)
             btn.blockSignals(False)
 
     def _sync_company_folder_filter_checks(self):

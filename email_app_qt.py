@@ -7,15 +7,17 @@ except ImportError as exc:
     raise
 
 from genimail.constants import APP_NAME
-from genimail_qt.theme import APP_STYLE
+from genimail.infra.config_store import Config
+from genimail_qt.theme import style_for_theme
 from genimail_qt.window import GeniMailQtWindow
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setStyleSheet(APP_STYLE)
-    window = GeniMailQtWindow()
+    config = Config()
+    app.setStyleSheet(style_for_theme(config.get("theme_mode")))
+    window = GeniMailQtWindow(config=config)
     window.showMaximized()
     return app.exec()
 

@@ -34,6 +34,10 @@ class LayoutMixin:
         self.connect_btn.clicked.connect(self._start_authentication)
         self.reconnect_btn = QPushButton("Reconnect")
         self.reconnect_btn.clicked.connect(self._reconnect)
+        self.theme_toggle_btn = QPushButton("Dark Mode: Off")
+        self.theme_toggle_btn.setObjectName("themeToggleButton")
+        self.theme_toggle_btn.setCheckable(True)
+        self.theme_toggle_btn.clicked.connect(self._toggle_theme_mode)
 
         scan_btn = QPushButton("Scan")
         scan_btn.clicked.connect(self._launch_scanner)
@@ -42,6 +46,7 @@ class LayoutMixin:
         top_layout.addSpacing(TOP_BAR_TITLE_SPACING)
         top_layout.addWidget(self.status_lbl, 1)
         top_layout.addWidget(scan_btn)
+        top_layout.addWidget(self.theme_toggle_btn)
         top_layout.addWidget(self.reconnect_btn)
         top_layout.addWidget(self.connect_btn)
         root_layout.addWidget(top_bar)

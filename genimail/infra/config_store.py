@@ -19,6 +19,7 @@ class Config:
             "company_order": [],
             "client_id": "",
             "browser_engine": "webview2",
+            "theme_mode": "light",
             "pdf_calibration": {},
             "window_geometry": "1100x700",
             "quote_template_path": DEFAULT_QUOTE_TEMPLATE_FILE,

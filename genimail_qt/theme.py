@@ -1,4 +1,4 @@
-APP_STYLE = """
+LIGHT_APP_STYLE = """
 QWidget {
     font-size: 13px;
 }
@@ -66,6 +66,17 @@ QPushButton#primaryButton {
 QPushButton#primaryButton:hover {
     background: #185fc9;
     border-color: #185fc9;
+}
+QPushButton#themeToggleButton {
+    min-height: 30px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#themeToggleButton:checked {
+    background: #0f172a;
+    border-color: #0f172a;
+    color: #ffffff;
 }
 QPushButton#companySectionButton {
     text-align: left;
@@ -293,4 +304,274 @@ QListWidget#companyList::item:selected {
     color: #0f172a;
     font-weight: 600;
 }
+QWidget#pdfToolPanel {
+    background: #f7f9fc;
+    border-right: 1px solid #dfe3ea;
+}
+QWidget#pdfToolPanel QLabel {
+    font-size: 12px;
+    color: #475467;
+}
+QWidget#pdfToolPanel QRadioButton {
+    font-size: 12px;
+    color: #1f2937;
+    spacing: 4px;
+}
+QLabel#pdfCalStatus {
+    font-size: 11px;
+    color: #334155;
+    padding: 2px 0;
+}
+QLabel#pdfResultLabel {
+    font-size: 12px;
+    color: #1f2937;
+    font-weight: 600;
+    padding: 1px 0;
+}
+QWidget#pdfToolPanel QPushButton {
+    padding: 4px 8px;
+    min-height: 26px;
+    font-size: 12px;
+}
+QWidget#pdfToolPanel QLineEdit {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
 """
+
+DARK_APP_STYLE_OVERRIDES = """
+QMainWindow {
+    background-color: #0d1117;
+}
+QFrame#topBar {
+    background-color: #161b22;
+    border-bottom: 1px solid #30363d;
+}
+QLabel#appTitle {
+    color: #e6edf3;
+}
+QLabel#statusLabel {
+    color: #8b949e;
+}
+QTabWidget::pane {
+    border: 1px solid #30363d;
+    background: #0f1720;
+}
+QTabBar::tab {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-bottom-color: #30363d;
+    color: #9aa4b2;
+}
+QTabBar::tab:selected {
+    background: #0f1720;
+    color: #f0f6fc;
+    border-bottom-color: #0f1720;
+}
+QPushButton {
+    background: #21262d;
+    border: 1px solid #3a4149;
+    color: #e6edf3;
+}
+QPushButton:hover {
+    border-color: #5b6572;
+    background: #30363d;
+}
+QPushButton:disabled {
+    color: #6e7681;
+    background: #171b20;
+    border-color: #2b3138;
+}
+QPushButton#primaryButton {
+    background: #2f81f7;
+    border-color: #2f81f7;
+    color: #ffffff;
+}
+QPushButton#primaryButton:hover {
+    background: #1f6feb;
+    border-color: #1f6feb;
+}
+QPushButton#themeToggleButton {
+    background: #0f1720;
+    border: 1px solid #3a4149;
+    color: #e6edf3;
+}
+QPushButton#themeToggleButton:hover {
+    background: #1a2331;
+    border-color: #5b6572;
+}
+QPushButton#themeToggleButton:checked {
+    background: #2f81f7;
+    border-color: #2f81f7;
+    color: #ffffff;
+}
+QPushButton#companySectionButton {
+    background: #161b22;
+    border-color: #3a4149;
+    color: #c9d1d9;
+}
+QPushButton#companySectionButton:hover {
+    background: #1d2430;
+}
+QPushButton#companyInlineButton {
+    background: #171d24;
+    border-color: #3a4149;
+    color: #c9d1d9;
+}
+QPushButton#companyInlineButton:hover {
+    background: #1e2733;
+    border-color: #5b6572;
+}
+QPushButton#companyTabButton {
+    background: #161b22;
+    border: 1px solid #3a4149;
+    color: #c9d1d9;
+}
+QPushButton#companyTabButton:hover {
+    background: #1f2733;
+    border-color: #5b6572;
+}
+QPushButton#companyTabButton:checked {
+    background: #1d4ed8;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+QPushButton#companyFolderChip {
+    background: #151c26;
+    border: 1px solid #3a4149;
+    color: #9aa4b2;
+}
+QPushButton#companyFolderChip:hover {
+    background: #1e2733;
+    border-color: #5b6572;
+}
+QPushButton#companyFolderChip:checked {
+    background: #1d4ed8;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+QPushButton#backToListBtn {
+    color: #6cb6ff;
+}
+QLabel#companyFilterBadge {
+    background: #10243d;
+    border: 1px solid #244b74;
+    color: #9ecbff;
+}
+QLabel#messageHeader {
+    color: #f0f6fc;
+}
+QFrame#toastFrame {
+    background: #111827;
+    border-color: #334155;
+}
+QLabel#toastLabel {
+    color: #f8fafc;
+}
+QLineEdit, QTextEdit, QListWidget {
+    border: 1px solid #3a4149;
+    background: #111827;
+    color: #e6edf3;
+}
+QLineEdit:focus, QTextEdit:focus {
+    border-color: #2f81f7;
+}
+QGroupBox {
+    border: 1px solid #30363d;
+    background: #0f1720;
+}
+QGroupBox::title {
+    color: #9aa4b2;
+}
+QWidget#attachmentThumbnails {
+    background: #111827;
+    border: 1px solid #30363d;
+}
+QPushButton#attachmentThumbnail:hover {
+    border-color: #2f81f7;
+    background: #1e2a38;
+}
+QLabel#attachmentThumbnailOverflow {
+    color: #9aa4b2;
+}
+QPushButton#downloadResultButton {
+    background: #0f2b24;
+    border: 1px solid #2a7a68;
+    color: #9ff7db;
+}
+QPushButton#downloadResultButton:hover {
+    background: #12352d;
+    border-color: #34a18a;
+}
+QListWidget::item:selected {
+    background: #1e293b;
+    color: #f8fafc;
+}
+QPushButton#folderButton {
+    background: #161b22;
+    border: 1px solid #3a4149;
+    color: #c9d1d9;
+}
+QPushButton#folderButton:hover {
+    background: #1f2733;
+    border-color: #5b6572;
+}
+QPushButton#folderButton:checked {
+    background: #1d4ed8;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+QListWidget#companyList::item {
+    border: 1px solid #30363d;
+}
+QListWidget#companyList::item:selected {
+    background: #1e293b;
+    border: 1px solid #2f81f7;
+    color: #f8fafc;
+}
+QWidget#pdfToolPanel {
+    background: #0f1720;
+    border-right: 1px solid #30363d;
+}
+QWidget#pdfToolPanel QLabel {
+    color: #9aa4b2;
+}
+QWidget#pdfToolPanel QRadioButton {
+    color: #c9d1d9;
+}
+QLabel#pdfCalStatus {
+    color: #8b949e;
+}
+QLabel#pdfResultLabel {
+    color: #e6edf3;
+}
+"""
+
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+
+
+def normalize_theme_mode(value):
+    return THEME_DARK if str(value or "").strip().lower() == THEME_DARK else THEME_LIGHT
+
+
+def style_for_theme(mode):
+    normalized = normalize_theme_mode(mode)
+    if normalized == THEME_DARK:
+        return f"{LIGHT_APP_STYLE}\n{DARK_APP_STYLE_OVERRIDES}"
+    return LIGHT_APP_STYLE
+
+
+# Backwards compatibility for existing imports.
+APP_STYLE = LIGHT_APP_STYLE
+
+__all__ = [
+    "APP_STYLE",
+    "DARK_APP_STYLE_OVERRIDES",
+    "LIGHT_APP_STYLE",
+    "THEME_DARK",
+    "THEME_LIGHT",
+    "normalize_theme_mode",
+    "style_for_theme",
+]

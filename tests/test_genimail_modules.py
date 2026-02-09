@@ -22,6 +22,7 @@ def test_config_defaults_include_quote_paths():
     assert config.get("quote_template_path")
     assert config.get("quote_output_dir")
     assert config.get("browser_engine") == "webview2"
+    assert config.get("theme_mode") == "light"
     assert isinstance(config.get("company_collapsed"), bool)
     assert isinstance(config.get("company_favorites"), list)
     assert isinstance(config.get("company_hidden"), list)

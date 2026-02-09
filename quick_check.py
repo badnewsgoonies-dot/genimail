@@ -38,6 +38,7 @@ PY_FILES = [
     "genimail_qt/company_tab_manager_dialog.py",
     "genimail_qt/webview_utils.py",
     "genimail_qt/webview_page.py",
+    "genimail_qt/pdf_graphics_view.py",
     "genimail_qt/takeoff_engine.py",
     "genimail_qt/window.py",
     "genimail_qt/mixins/attachments.py",

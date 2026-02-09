@@ -1,7 +1,7 @@
 import threading
 
 from PySide6.QtCore import QEvent, QThreadPool, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow
 
 from genimail.constants import POLL_INTERVAL_MS, QT_THREAD_POOL_MAX_WORKERS
 from genimail.infra.cache_store import EmailCache
@@ -22,7 +22,7 @@ from genimail_qt.mixins import (
     PdfUiMixin,
     WindowStateMixin,
 )
-from genimail_qt.mixins.pdf import HAS_QTPDF
+from genimail_qt.theme import THEME_DARK, THEME_LIGHT, normalize_theme_mode, style_for_theme
 
 
 class GeniMailQtWindow(
@@ -43,9 +43,11 @@ class GeniMailQtWindow(
 ):
     auth_code_received = Signal(str)
 
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
-        self.config = Config()
+        self.config = config or Config()
+        self._theme_mode = normalize_theme_mode(self.config.get("theme_mode", THEME_LIGHT))
+        self._apply_theme_stylesheet()
         self.cache = EmailCache()
         self.graph = None
         self.sync_service = None
@@ -78,9 +80,41 @@ class GeniMailQtWindow(
         self.workers = WorkerManager(self.thread_pool, self, self._on_default_worker_error)
 
         self._build_ui()
+        self._sync_theme_toggle_button()
         self._restore_window_geometry()
         self.auth_code_received.connect(self._show_auth_code_dialog)
         QTimer.singleShot(250, self._auto_connect_on_startup)
+
+    def _apply_theme_stylesheet(self):
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(style_for_theme(self._theme_mode))
+
+    def _sync_theme_toggle_button(self):
+        if not hasattr(self, "theme_toggle_btn"):
+            return
+        is_dark = self._theme_mode == THEME_DARK
+        self.theme_toggle_btn.blockSignals(True)
+        self.theme_toggle_btn.setChecked(is_dark)
+        self.theme_toggle_btn.setText("Dark Mode: On" if is_dark else "Dark Mode: Off")
+        self.theme_toggle_btn.blockSignals(False)
+
+    def _set_theme_mode(self, mode, persist=False):
+        normalized = normalize_theme_mode(mode)
+        if normalized != self._theme_mode:
+            self._theme_mode = normalized
+            self._apply_theme_stylesheet()
+            if hasattr(self, "_company_color_delegate"):
+                self._company_color_delegate.set_theme_mode(self._theme_mode)
+            if hasattr(self, "message_list"):
+                self.message_list.viewport().update()
+        if persist:
+            self.config.set("theme_mode", self._theme_mode)
+        self._sync_theme_toggle_button()
+
+    def _toggle_theme_mode(self, _checked=False):
+        target = THEME_DARK if self._theme_mode != THEME_DARK else THEME_LIGHT
+        self._set_theme_mode(target, persist=True)
 
     def _on_default_worker_error(self, _trace_text):
         self.connect_btn.setEnabled(True)
@@ -116,4 +150,4 @@ class GeniMailQtWindow(
             self._on_host_geometry_changed()
 
 
-__all__ = ["GeniMailQtWindow", "HAS_QTPDF"]
+__all__ = ["GeniMailQtWindow"]

@@ -23,11 +23,6 @@ _PAD_LEFT = 14
 _DATE_W = 70
 _SENDER_W = 170
 _GAP = 16
-_COLOR_DATE = "#64748b"
-_COLOR_SENDER = "#1b1f24"
-_COLOR_SUBJECT = "#1b1f24"
-_COLOR_PREVIEW = "#8893a4"
-_COLOR_UNREAD_DOT = "#1f6feb"
 
 
 class CompanyColorDelegate(QStyledItemDelegate):
@@ -36,9 +31,13 @@ class CompanyColorDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._color_map = {}
+        self._is_dark_mode = False
 
     def set_color_map(self, color_map):
         self._color_map = dict(color_map or {})
+
+    def set_theme_mode(self, mode):
+        self._is_dark_mode = str(mode or "").strip().lower() == "dark"
 
     @staticmethod
     def _company_color_for_msg(msg, color_map):
@@ -67,20 +66,23 @@ class CompanyColorDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         painter.save()
+        dark_mode = self._is_dark_mode
 
         # -- background (selection / alternate) --
         is_selected = bool(option.state & QStyle.State_Selected)
         msg = index.data(Qt.UserRole) or {}
         company_color = self._company_color_for_msg(msg, self._color_map) if isinstance(msg, dict) else None
+        selection_color = QColor("#1f2937" if dark_mode else "#dbeafe")
+        alternate_color = QColor("#141b24" if dark_mode else "#fbfcfe")
 
         if is_selected:
-            painter.fillRect(option.rect, QColor("#dbeafe"))
+            painter.fillRect(option.rect, selection_color)
         elif company_color:
             tint = QColor(company_color)
-            tint.setAlpha(22)
+            tint.setAlpha(28 if dark_mode else 22)
             painter.fillRect(option.rect, tint)
         elif index.row() % 2 == 1:
-            painter.fillRect(option.rect, QColor("#fbfcfe"))
+            painter.fillRect(option.rect, alternate_color)
 
         # -- color stripe --
         if company_color:
@@ -98,7 +100,7 @@ class CompanyColorDelegate(QStyledItemDelegate):
         # Unread dot
         if is_unread:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(_COLOR_UNREAD_DOT))
+            painter.setBrush(QColor("#58a6ff" if dark_mode else "#1f6feb"))
             dot_r = 4
             painter.drawEllipse(x - 10, y_center - dot_r, dot_r * 2, dot_r * 2)
 
@@ -113,7 +115,7 @@ class CompanyColorDelegate(QStyledItemDelegate):
         date_font = QFont(base_font)
         fm_date = QFontMetrics(date_font)
         painter.setFont(date_font)
-        painter.setPen(QColor(_COLOR_DATE))
+        painter.setPen(QColor("#9aa4b2" if dark_mode else "#64748b"))
         date_rect = QRect(x, option.rect.top(), _DATE_W, option.rect.height())
         painter.drawText(date_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_date.elidedText(date_text, Qt.ElideRight, _DATE_W))
         x += _DATE_W + _GAP
@@ -123,7 +125,7 @@ class CompanyColorDelegate(QStyledItemDelegate):
         sender_font.setBold(True)
         fm_sender = QFontMetrics(sender_font)
         painter.setFont(sender_font)
-        painter.setPen(QColor(_COLOR_SENDER))
+        painter.setPen(QColor("#e6edf3" if dark_mode else "#1b1f24"))
         sender_rect = QRect(x, option.rect.top(), _SENDER_W, option.rect.height())
         painter.drawText(sender_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_sender.elidedText(sender_text, Qt.ElideRight, _SENDER_W))
         x += _SENDER_W + _GAP
@@ -136,7 +138,7 @@ class CompanyColorDelegate(QStyledItemDelegate):
         subject_w = min(int(remaining * 0.4), 500) if remaining > 100 else remaining
         fm_subject = QFontMetrics(subject_font)
         painter.setFont(subject_font)
-        painter.setPen(QColor(_COLOR_SUBJECT))
+        painter.setPen(QColor("#f0f6fc" if dark_mode else "#1b1f24"))
         subject_rect = QRect(x, option.rect.top(), subject_w, option.rect.height())
         painter.drawText(subject_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_subject.elidedText(subject_text, Qt.ElideRight, subject_w))
         x += subject_w + _GAP
@@ -147,12 +149,12 @@ class CompanyColorDelegate(QStyledItemDelegate):
             preview_font = QFont(base_font)
             fm_preview = QFontMetrics(preview_font)
             painter.setFont(preview_font)
-            painter.setPen(QColor(_COLOR_PREVIEW))
+            painter.setPen(QColor("#8b949e" if dark_mode else "#8893a4"))
             preview_rect = QRect(x, option.rect.top(), preview_w, option.rect.height())
             painter.drawText(preview_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_preview.elidedText(preview_text, Qt.ElideRight, preview_w))
 
         # Bottom border
-        painter.setPen(QPen(QColor("#eef2f7"), 1))
+        painter.setPen(QPen(QColor("#283242" if dark_mode else "#eef2f7"), 1))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
 
         painter.restore()
@@ -373,6 +375,7 @@ class EmailListMixin:
             self.message_list.setItemDelegate(self._company_color_delegate)
         color_map = getattr(self, "_company_color_map", {})
         self._company_color_delegate.set_color_map(color_map)
+        self._company_color_delegate.set_theme_mode(getattr(self, "_theme_mode", "light"))
 
     # ------------------------------------------------------------------
     # Message selection and detail

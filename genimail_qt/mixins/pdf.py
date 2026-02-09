@@ -1,26 +1,38 @@
+import math
 import os
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QFileDialog, QLabel, QMessageBox, QVBoxLayout, QWidget
-
-try:
-    from PySide6.QtPdf import QPdfDocument
-    from PySide6.QtPdfWidgets import QPdfView
-
-    HAS_QTPDF = True
-except Exception:
-    QPdfDocument = None
-    QPdfView = None
-    HAS_QTPDF = False
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QLabel, QMessageBox
 
 from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
+from genimail_qt.pdf_graphics_view import PdfGraphicsView
+from genimail_qt.takeoff_engine import compute_floor_plan, parse_length_to_feet
 from genimail_qt.webview_page import FilteredWebEnginePage
+
+# Tool mode IDs (match QButtonGroup ids in pdf_ui.py)
+_TOOL_NAVIGATE = 0
+_TOOL_CALIBRATE = 1
+_TOOL_FLOORPLAN = 2
 
 
 class PdfMixin:
+    # ── Measurement state (per-session, cleared on page/doc change) ──
+    _poly_points = None  # [(x_pt, y_pt), ...]
+    _cal_factor = 1.0
+    _has_cal = False
+    _cal_start = None  # (x_pt, y_pt) for calibrate first click
+
+    def _init_pdf_measurement_state(self):
+        self._poly_points = []
+        self._cal_factor = 1.0
+        self._has_cal = False
+        self._cal_start = None
+
+    # ── Open / create ────────────────────────────────────────────
+
     def _open_pdf_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open PDF", PDF_DIR, "PDF Files (*.pdf);;All Files (*.*)")
         if not path:
@@ -59,50 +71,280 @@ class PdfMixin:
             self.workspace_tabs.setCurrentWidget(self.pdf_tab)
         self._set_status(f"Opened PDF: {tab_label}")
 
+        self._on_pdf_doc_opened(view)
+
     def _create_pdf_widget(self, normalized_path):
-        errors = []
-        if HAS_QTPDF:
-            try:
-                return self._create_qtpdf_widget(normalized_path)
-            except Exception as exc:
-                errors.append(f"QtPdf: {exc}")
-
-        try:
-            return self._create_webengine_pdf_widget(normalized_path)
-        except Exception as exc:
-            errors.append(f"WebEngine: {exc}")
-
-        detail = "; ".join(errors) if errors else "No PDF renderer available."
-        raise RuntimeError(detail)
-
-    def _create_qtpdf_widget(self, normalized_path):
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        document = QPdfDocument(container)
-        load_error = document.load(normalized_path)
-        if load_error != QPdfDocument.Error.None_:
-            raise RuntimeError(f"QtPdf load failed: {load_error.name}")
-
-        view = QPdfView(container)
-        view.setDocument(document)
-        view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-        view.setPageMode(QPdfView.PageMode.MultiPage)
-        layout.addWidget(view, 1)
-
-        container._pdf_document = document
-        container._pdf_view = view
-        return container
-
-    def _create_webengine_pdf_widget(self, normalized_path):
-        view = self._create_web_view("pdf")
-        settings = view.settings()
-        settings.setAttribute(QWebEngineSettings.PdfViewerEnabled, True)
-        settings.setAttribute(QWebEngineSettings.PluginsEnabled, True)
-        view.setUrl(QUrl.fromLocalFile(normalized_path))
+        view = PdfGraphicsView()
+        view.open_document(normalized_path)
+        view.pointClicked.connect(self._on_pdf_point_clicked)
+        view.pageChanged.connect(self._on_pdf_page_changed)
         return view
+
+    # ── Tab management ───────────────────────────────────────────
+
+    def _find_pdf_tab_index(self, path):
+        normalized = path.lower()
+        for idx in range(self.pdf_tabs.count()):
+            widget = self.pdf_tabs.widget(idx)
+            if widget is None:
+                continue
+            if widget.property("pdf_path") == normalized:
+                return idx
+        return None
+
+    def _on_pdf_tab_close_requested(self, index):
+        widget = self.pdf_tabs.widget(index)
+        if widget is not None:
+            if isinstance(widget, PdfGraphicsView):
+                widget.close_document()
+            self.pdf_tabs.removeTab(index)
+            widget.deleteLater()
+        if self.pdf_tabs.count() == 0:
+            self._add_pdf_placeholder_tab()
+            self._update_pdf_page_label(0, 0)
+
+    def _close_current_pdf_tab(self):
+        idx = self.pdf_tabs.currentIndex()
+        if idx >= 0:
+            self._on_pdf_tab_close_requested(idx)
+
+    def _add_pdf_placeholder_tab(self):
+        placeholder = QLabel("Open a PDF to view it here.")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setProperty("is_placeholder", True)
+        self.pdf_tabs.addTab(placeholder, "Current PDF")
+
+    # ── Current view helper ──────────────────────────────────────
+
+    def _current_pdf_view(self):
+        widget = self.pdf_tabs.currentWidget()
+        if isinstance(widget, PdfGraphicsView):
+            return widget
+        return None
+
+    # ── Page navigation ──────────────────────────────────────────
+
+    def _on_pdf_prev_page(self):
+        view = self._current_pdf_view()
+        if view:
+            view.prev_page()
+
+    def _on_pdf_next_page(self):
+        view = self._current_pdf_view()
+        if view:
+            view.next_page()
+
+    def _on_pdf_page_changed(self, current, total):
+        self._update_pdf_page_label(current, total)
+        self._clear_polygon()
+
+    def _update_pdf_page_label(self, current, total):
+        if hasattr(self, "_pdf_page_label"):
+            self._pdf_page_label.setText(f"Page {current + 1}/{total}" if total > 0 else "Page 0/0")
+
+    # ── Zoom ─────────────────────────────────────────────────────
+
+    def _on_pdf_fit_width(self):
+        view = self._current_pdf_view()
+        if view:
+            view.fit_width()
+
+    def _on_pdf_zoom_in(self):
+        view = self._current_pdf_view()
+        if view:
+            view.zoom_in()
+
+    def _on_pdf_zoom_out(self):
+        view = self._current_pdf_view()
+        if view:
+            view.zoom_out()
+
+    # ── Tool mode switching ──────────────────────────────────────
+
+    def _on_pdf_tool_changed(self, tool_id, checked):
+        if not checked:
+            return
+        view = self._current_pdf_view()
+        click_enabled = tool_id in (_TOOL_CALIBRATE, _TOOL_FLOORPLAN)
+        if view:
+            view.set_click_enabled(click_enabled)
+        if tool_id == _TOOL_CALIBRATE:
+            self._cal_start = None
+            self._pdf_cal_status.setText(
+                f"Cal: x{self._cal_factor:.4f}" if self._has_cal else "Click two points on a known dimension"
+            )
+        elif tool_id == _TOOL_FLOORPLAN:
+            if not self._has_cal:
+                self._pdf_cal_status.setText("Warning: not calibrated")
+
+    # ── Document opened ──────────────────────────────────────────
+
+    def _on_pdf_doc_opened(self, view):
+        self._init_pdf_measurement_state()
+        self._load_calibration(view.doc_key)
+        total = view.page_count
+        self._update_pdf_page_label(0, total)
+        self._update_measurement_labels()
+        # Ensure tool mode click state matches current radio
+        tool_id = self._pdf_tool_group.checkedId()
+        click_enabled = tool_id in (_TOOL_CALIBRATE, _TOOL_FLOORPLAN)
+        view.set_click_enabled(click_enabled)
+
+    # ── Point click routing ──────────────────────────────────────
+
+    def _on_pdf_point_clicked(self, x_pt, y_pt):
+        tool_id = self._pdf_tool_group.checkedId()
+        if tool_id == _TOOL_CALIBRATE:
+            self._on_cal_click(x_pt, y_pt)
+        elif tool_id == _TOOL_FLOORPLAN:
+            self._on_poly_click(x_pt, y_pt)
+
+    # ── Calibration ──────────────────────────────────────────────
+
+    def _on_cal_click(self, x_pt, y_pt):
+        view = self._current_pdf_view()
+        if not view:
+            return
+        if self._cal_start is None:
+            self._cal_start = (x_pt, y_pt)
+            view.clear_overlays()
+            view.add_vertex_dot(x_pt, y_pt)
+            self._pdf_cal_status.setText("Click second point...")
+        else:
+            x0, y0 = self._cal_start
+            view.add_vertex_dot(x_pt, y_pt)
+            view.add_edge_line(x0, y0, x_pt, y_pt)
+
+            pdf_dist_pts = math.hypot(x_pt - x0, y_pt - y0)
+            if pdf_dist_pts < 0.5:
+                self._pdf_cal_status.setText("Points too close. Try again.")
+                self._cal_start = None
+                return
+
+            text, ok = QInputDialog.getText(
+                self, "Calibrate", "Enter the real-world length of this line\n(e.g. 10ft, 120in, 3m):"
+            )
+            if ok and text.strip():
+                try:
+                    real_feet = parse_length_to_feet(text.strip())
+                    real_inches = real_feet * 12.0
+                    pdf_inches = pdf_dist_pts / 72.0
+                    self._cal_factor = real_inches / pdf_inches
+                    self._has_cal = True
+                    self._pdf_cal_status.setText(f"Cal: x{self._cal_factor:.4f}")
+                    self._save_calibration(view.doc_key, self._cal_factor)
+                except Exception as exc:
+                    self._pdf_cal_status.setText(f"Error: {exc}")
+            else:
+                self._pdf_cal_status.setText("Calibration cancelled.")
+
+            self._cal_start = None
+            view.clear_overlays()
+
+    def _save_calibration(self, doc_key, cal_factor):
+        if not doc_key or not hasattr(self, "config"):
+            return
+        cal_data = self.config.get("pdf_calibration", {}) or {}
+        cal_data[doc_key] = {"cal_factor": float(cal_factor)}
+        self.config.set("pdf_calibration", cal_data)
+
+    def _load_calibration(self, doc_key):
+        self._has_cal = False
+        self._cal_factor = 1.0
+        if not doc_key or not hasattr(self, "config"):
+            return
+        cal_data = self.config.get("pdf_calibration", {}) or {}
+        entry = cal_data.get(doc_key)
+        if not entry:
+            self._pdf_cal_status.setText("Not calibrated")
+            return
+        try:
+            if isinstance(entry, dict):
+                cf = float(entry.get("cal_factor", 1.0))
+            else:
+                cf = float(entry)
+            if math.isfinite(cf) and cf > 0:
+                self._cal_factor = cf
+                self._has_cal = True
+        except Exception:
+            pass
+        if self._has_cal:
+            self._pdf_cal_status.setText(f"Cal: x{self._cal_factor:.4f}")
+        else:
+            self._pdf_cal_status.setText("Not calibrated")
+
+    # ── Polygon (Floor Plan) ─────────────────────────────────────
+
+    def _on_poly_click(self, x_pt, y_pt):
+        view = self._current_pdf_view()
+        if not view:
+            return
+        if self._poly_points is None:
+            self._poly_points = []
+        self._poly_points.append((x_pt, y_pt))
+        view.redraw_overlays(self._poly_points)
+        self._update_measurement_labels()
+
+    def _on_pdf_close_shape(self):
+        if not self._poly_points or len(self._poly_points) < 3:
+            if hasattr(self, "toaster"):
+                self.toaster.show("Need at least 3 points to close shape.", kind="error")
+            return
+        view = self._current_pdf_view()
+
+        # Close the polygon visually
+        if view and len(self._poly_points) >= 3:
+            first = self._poly_points[0]
+            last = self._poly_points[-1]
+            view.add_edge_line(last[0], last[1], first[0], first[1])
+
+        # Convert PDF points → real-world feet
+        cal = self._cal_factor
+        points_feet = [(x / 72.0 * cal / 12.0, y / 72.0 * cal / 12.0) for x, y in self._poly_points]
+        result = compute_floor_plan(points_feet, scale_factor=1.0)
+
+        wall_height = 8.0
+        try:
+            wall_height = parse_length_to_feet(self._pdf_wall_height_input.text())
+        except Exception:
+            pass
+
+        wall_sqft = result.perimeter_feet * wall_height
+        floor_sqft = result.floor_area_sqft
+
+        self._pdf_perimeter_label.setText(f"Perimeter: {result.perimeter_feet:.1f} ft")
+        self._pdf_wall_sqft_label.setText(f"Wall Sqft: {wall_sqft:.1f}")
+        self._pdf_floor_sqft_label.setText(f"Floor Sqft: {floor_sqft:.1f}")
+
+    def _on_pdf_undo_point(self):
+        if not self._poly_points:
+            return
+        self._poly_points.pop()
+        view = self._current_pdf_view()
+        if view:
+            view.redraw_overlays(self._poly_points)
+        self._update_measurement_labels()
+
+    def _on_pdf_clear_polygon(self):
+        self._clear_polygon()
+
+    def _clear_polygon(self):
+        self._poly_points = []
+        self._cal_start = None
+        view = self._current_pdf_view()
+        if view:
+            view.clear_overlays()
+        self._update_measurement_labels()
+
+    def _update_measurement_labels(self):
+        n = len(self._poly_points) if self._poly_points else 0
+        self._pdf_points_label.setText(f"Points: {n}")
+        if n < 3:
+            self._pdf_perimeter_label.setText("Perimeter: \u2014")
+            self._pdf_wall_sqft_label.setText("Wall Sqft: \u2014")
+            self._pdf_floor_sqft_label.setText("Floor Sqft: \u2014")
+
+    # ── WebEngine support (used by email preview and other mixins) ──
 
     def _create_web_view(self, surface_name):
         view = QWebEngineView()
@@ -156,35 +398,6 @@ class PdfMixin:
             )
             if hasattr(self, "_add_download_result_button"):
                 self._add_download_result_button(path)
-
-    def _find_pdf_tab_index(self, path):
-        normalized = path.lower()
-        for idx in range(self.pdf_tabs.count()):
-            widget = self.pdf_tabs.widget(idx)
-            if widget is None:
-                continue
-            if widget.property("pdf_path") == normalized:
-                return idx
-        return None
-
-    def _on_pdf_tab_close_requested(self, index):
-        widget = self.pdf_tabs.widget(index)
-        if widget is not None:
-            self.pdf_tabs.removeTab(index)
-            widget.deleteLater()
-        if self.pdf_tabs.count() == 0:
-            self._add_pdf_placeholder_tab()
-
-    def _close_current_pdf_tab(self):
-        idx = self.pdf_tabs.currentIndex()
-        if idx >= 0:
-            self._on_pdf_tab_close_requested(idx)
-
-    def _add_pdf_placeholder_tab(self):
-        placeholder = QLabel("Open a PDF to view it here.")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setProperty("is_placeholder", True)
-        self.pdf_tabs.addTab(placeholder, "Current PDF")
 
     @staticmethod
     def _unique_output_path(directory, filename):
