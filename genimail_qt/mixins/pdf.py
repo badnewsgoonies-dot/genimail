@@ -154,6 +154,8 @@ class PdfMixin:
                     else open_document_file(p)
                 ),
             )
+            if hasattr(self, "_add_download_result_button"):
+                self._add_download_result_button(path)
 
     def _find_pdf_tab_index(self, path):
         normalized = path.lower()

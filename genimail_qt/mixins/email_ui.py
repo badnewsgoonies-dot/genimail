@@ -138,6 +138,13 @@ class EmailUiMixin:
         attach_buttons.addWidget(self.save_attachment_btn)
         attach_buttons.addStretch(1)
         attach_layout.addLayout(attach_buttons)
+        self.download_results_widget = QWidget()
+        self.download_results_layout = QHBoxLayout(self.download_results_widget)
+        self.download_results_layout.setContentsMargins(0, 0, 0, 0)
+        self.download_results_layout.setSpacing(6)
+        self.download_results_layout.addStretch(1)
+        self.download_results_widget.hide()
+        attach_layout.addWidget(self.download_results_widget)
         detail_layout.addWidget(attach_box)
 
         self.message_header = QLabel("Select a message")

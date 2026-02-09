@@ -222,6 +222,19 @@ QLabel#attachmentThumbnailOverflow {
     padding: 8px;
     font-size: 12px;
 }
+QPushButton#downloadResultButton {
+    background: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: #065f46;
+    font-weight: 600;
+    font-size: 12px;
+}
+QPushButton#downloadResultButton:hover {
+    background: #d1fae5;
+    border-color: #34d399;
+}
 QListWidget::item {
     padding: 10px 12px;
 }

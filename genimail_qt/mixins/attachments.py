@@ -3,7 +3,7 @@ import os
 from functools import partial
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from genimail.infra.document_store import open_document_file
 from genimail.paths import PDF_DIR
@@ -76,6 +76,33 @@ class EmailAttachmentMixin:
         else:
             open_document_file(target_path)
         self._set_status(f"Opened attachment: {os.path.basename(target_path)}")
+
+    def _add_download_result_button(self, file_path):
+        if not hasattr(self, "download_results_layout"):
+            return
+        filename = os.path.basename(file_path)
+        btn = QPushButton(f"Open: {filename}")
+        btn.setObjectName("downloadResultButton")
+        btn.setToolTip(file_path)
+        btn.clicked.connect(lambda _checked=False, p=file_path: (
+            self._open_pdf_file(p, activate=True)
+            if p.lower().endswith(".pdf")
+            else open_document_file(p)
+        ))
+        layout = self.download_results_layout
+        layout.insertWidget(layout.count() - 1, btn)
+        self.download_results_widget.show()
+
+    def _clear_download_results(self):
+        if not hasattr(self, "download_results_layout"):
+            return
+        layout = self.download_results_layout
+        while layout.count() > 1:
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.download_results_widget.hide()
 
     def _save_selected_attachment(self):
         attachment = self._selected_attachment()

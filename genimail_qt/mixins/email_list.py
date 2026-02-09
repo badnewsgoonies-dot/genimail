@@ -476,6 +476,8 @@ class EmailListMixin:
         self._render_message_detail(detail, attachments)
 
     def _render_message_detail(self, detail, attachments):
+        if hasattr(self, "_clear_download_results"):
+            self._clear_download_results()
         sender = detail.get("from", {}).get("emailAddress", {}).get("name") or "Unknown"
         address = detail.get("from", {}).get("emailAddress", {}).get("address") or ""
         received = format_date(detail.get("receivedDateTime", ""))
