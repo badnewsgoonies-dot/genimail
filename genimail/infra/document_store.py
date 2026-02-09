@@ -9,41 +9,137 @@ import shutil
 import webbrowser
 from datetime import datetime
 
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
+
 from genimail.domain.quotes import _sanitize_filename_part, render_quote_template_text
 from genimail.paths import DEFAULT_QUOTE_TEMPLATE_FILE, QUOTE_DIR
 
-_STARTER_TEMPLATE = (
-    "GX Painting LTD\n"
-    "Quote #: {{QUOTE_ID}}\n"
-    "Date: {{DATE}}\n"
-    "\n"
-    "Client: {{CLIENT_NAME}}\n"
-    "Email: {{CLIENT_EMAIL}}\n"
-    "Project: {{PROJECT_NAME}}\n"
-    "Reference: {{EMAIL_SUBJECT}}\n"
-    "\n"
-    "Scope of Work:\n"
-    "- [Describe the work]\n"
-    "\n"
-    "Pricing:\n"
-    "- Labor: [Enter amount]\n"
-    "- Materials: [Enter amount]\n"
-    "- Total: [Enter amount]\n"
-    "\n"
-    "Notes:\n"
-    "- [Add terms or timeline]\n"
-    "\n"
-    "Prepared by: GX Painting LTD\n"
-)
+_DOC_EXTENSIONS = {".doc", ".docx"}
+
+
+def _create_docx_template(template_path: str):
+    """Generate the default GX Painting quote template as a formatted .docx."""
+    doc = Document()
+    style = doc.styles["Normal"]
+    style.font.name = "Calibri"
+    style.font.size = Pt(11)
+
+    # --- Company header + date on same line ---
+    p = doc.add_paragraph()
+    run = p.add_run("GX Painting LTD")
+    run.font.size = Pt(11)
+    run.font.color.rgb = None
+    p.add_run("\t\t\t\t\t\t\t[Date Here]")
+
+    for line in [
+        "25 Robert Berry Cres",
+        "King City ON",
+        "L7B0M4",
+        "Cell: (416)-560-8741",
+        "Email: gxpainting@hotmail.com",
+    ]:
+        p = doc.add_paragraph(line)
+
+    doc.add_paragraph()  # blank line
+
+    # --- Quotation heading ---
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("Quotation")
+    run.bold = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Submitted to / Job Name ---
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("Submitted to:")
+    run.bold = True
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("Job Name:")
+    run.bold = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Below find the estimate ---
+    p = doc.add_paragraph("Below find the estimate for.")
+    p.runs[0].bold = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Scope of Work (bold + underline) ---
+    p = doc.add_paragraph()
+    run = p.add_run("Scope of Work")
+    run.bold = True
+    run.underline = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Bullet point ---
+    doc.add_paragraph("\t", style="List Bullet")
+
+    doc.add_paragraph()  # blank line
+
+    # --- Total Price ---
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("Total Price $ () + HST")
+    run.bold = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Separate Price / Note ---
+    p = doc.add_paragraph()
+    run = p.add_run("Separate Price:")
+    run.bold = True
+
+    p = doc.add_paragraph()
+    run = p.add_run("Note:")
+    run.bold = True
+
+    doc.add_paragraph()  # blank line
+
+    # --- Disclaimer ---
+    doc.add_paragraph(
+        "We supply all labour, materials, supervisions, tools, equipment "
+        "and insurance necessary to carry out and complete all of the "
+        "painting at the above project."
+    )
+
+    doc.add_paragraph()  # blank line
+
+    # --- Signature ---
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.add_run("Gaz Xure")
+
+    doc.save(template_path)
 
 
 def ensure_default_quote_template(template_path: str):
-    """Create a starter quote template if one does not exist."""
+    """Create the default quote template if one does not exist."""
     if os.path.exists(template_path):
         return
     os.makedirs(os.path.dirname(template_path), exist_ok=True)
-    with open(template_path, "w", encoding="utf-8", newline="\r\n") as f:
-        f.write(_STARTER_TEMPLATE)
+    if template_path.lower().endswith(".docx"):
+        _create_docx_template(template_path)
+    else:
+        # Fallback for non-.docx paths (legacy plain-text with placeholders)
+        with open(template_path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(
+                "GX Painting LTD\n"
+                "Quote #: {{QUOTE_ID}}\n"
+                "Date: {{DATE}}\n"
+                "\nClient: {{CLIENT_NAME}}\n"
+                "Email: {{CLIENT_EMAIL}}\n"
+                "Project: {{PROJECT_NAME}}\n"
+                "Reference: {{EMAIL_SUBJECT}}\n"
+                "\nPrepared by: GX Painting LTD\n"
+            )
 
 
 def create_quote_doc(template_path: str, output_dir: str, context: dict) -> str:
@@ -121,12 +217,12 @@ def open_document_file(path: str) -> bool:
 
 
 def latest_doc_file(output_dir: str):
-    """Return the most-recently-modified ``.doc`` file in *output_dir*, or ``None``."""
+    """Return the most-recently-modified ``.doc``/``.docx`` file in *output_dir*, or ``None``."""
     if not output_dir or not os.path.isdir(output_dir):
         return None
     matches = []
     for name in os.listdir(output_dir):
-        if name.lower().endswith(".doc"):
+        if os.path.splitext(name)[1].lower() in _DOC_EXTENSIONS:
             full = os.path.join(output_dir, name)
             try:
                 matches.append((os.path.getmtime(full), full))
