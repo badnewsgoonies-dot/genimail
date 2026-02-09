@@ -230,9 +230,11 @@ QListWidget::item:selected {
     color: #0f172a;
 }
 QListWidget#folderList,
-QListWidget#companyList,
-QListWidget#messageList {
+QListWidget#companyList {
     font-size: 14px;
+}
+QListWidget#messageList {
+    font-size: 20px;
 }
 QWidget#folderButtonsWidget {
     background: transparent;
@@ -257,12 +259,14 @@ QPushButton#folderButton:checked {
     color: #0f3d86;
 }
 QListWidget#messageList::item {
-    min-height: 44px;
-    padding: 8px 12px;
-    border-bottom: 1px solid #eef2f7;
+    min-height: 34px;
+    padding: 4px 0;
+}
+QListWidget#messageList::item:selected {
+    background: transparent;
 }
 QListWidget#messageList::item:alternate {
-    background: #fbfcfe;
+    background: transparent;
 }
 QListWidget#companyList::item {
     padding: 10px;

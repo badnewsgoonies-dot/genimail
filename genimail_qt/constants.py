@@ -43,6 +43,27 @@ ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS = 20
 
 COMPOSE_DIALOG_SIZE = (780, 620)
 
+COMPANY_COLOR_PALETTE = (
+    ("Red", "#e03e3e"),
+    ("Rose", "#d6336c"),
+    ("Pink", "#c2255c"),
+    ("Orange", "#e8590c"),
+    ("Amber", "#d9730d"),
+    ("Yellow", "#bf8b2e"),
+    ("Lime", "#5c940d"),
+    ("Green", "#2b8a3e"),
+    ("Teal", "#0c8599"),
+    ("Cyan", "#1098ad"),
+    ("Blue", "#1c7ed6"),
+    ("Indigo", "#4263eb"),
+    ("Purple", "#7048e8"),
+    ("Violet", "#9c36b5"),
+    ("Brown", "#86511a"),
+    ("Slate", "#64748b"),
+)
+COMPANY_COLOR_SWATCH_SIZE = 28
+COMPANY_COLOR_STRIPE_WIDTH = 4
+
 __all__ = [
     "ATTACHMENT_THUMBNAIL_HEIGHT_PX",
     "ATTACHMENT_THUMBNAIL_MAX_INITIAL",
@@ -50,6 +71,9 @@ __all__ = [
     "CID_SRC_PATTERN",
     "COMPANY_COLLAPSE_ICON_COLLAPSED",
     "COMPANY_COLLAPSE_ICON_EXPANDED",
+    "COMPANY_COLOR_PALETTE",
+    "COMPANY_COLOR_STRIPE_WIDTH",
+    "COMPANY_COLOR_SWATCH_SIZE",
     "COMPANY_STAR_ICON",
     "COMPOSE_DIALOG_SIZE",
     "JS_CONSOLE_DEBUG_ENV",

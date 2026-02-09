@@ -48,14 +48,14 @@ def test_message_matches_company_filter_rules():
 def test_load_company_queries_supports_legacy_dict_and_new_list():
     fake_dict = _FakeWindow({"companies": {"airmiles": "airmiles", "airmiles.ca": "airmiles.ca"}})
     assert GeniMailQtWindow._load_company_queries(fake_dict) == [
-        {"domain": "airmiles", "label": ""},
-        {"domain": "airmiles.ca", "label": ""},
+        {"domain": "airmiles", "label": "", "color": None},
+        {"domain": "airmiles.ca", "label": "", "color": None},
     ]
 
     fake_list = _FakeWindow({"companies": [" airmiles ", "airmiles.ca", "airmiles"]})
     assert GeniMailQtWindow._load_company_queries(fake_list) == [
-        {"domain": "airmiles", "label": ""},
-        {"domain": "airmiles.ca", "label": ""},
+        {"domain": "airmiles", "label": "", "color": None},
+        {"domain": "airmiles.ca", "label": "", "color": None},
     ]
 
 
@@ -70,8 +70,8 @@ def test_load_company_queries_reads_new_dict_list_format():
         }
     )
     assert GeniMailQtWindow._load_company_queries(fake) == [
-        {"domain": "acme.com", "label": "Acme Corp"},
-        {"domain": "test.org", "label": ""},
+        {"domain": "acme.com", "label": "Acme Corp", "color": None},
+        {"domain": "test.org", "label": "", "color": None},
     ]
 
 
@@ -219,6 +219,10 @@ def test_company_load_uses_sqlite_cache_before_background_refresh():
 
         def _set_status(self, text):
             self.status = text
+
+        @staticmethod
+        def _set_company_tabs_enabled(_enabled):
+            pass
 
         @staticmethod
         def _on_company_messages_loaded(_payload):

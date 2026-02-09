@@ -101,7 +101,7 @@ class EmailUiMixin:
         list_layout.addWidget(QLabel("Messages"))
         self.message_list = QListWidget()
         self.message_list.setObjectName("messageList")
-        self.message_list.setAlternatingRowColors(True)
+        self.message_list.setAlternatingRowColors(False)
         list_layout.addWidget(self.message_list, 1)
         self.message_stack.addWidget(list_page)
 

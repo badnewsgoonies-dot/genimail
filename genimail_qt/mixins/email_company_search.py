@@ -70,6 +70,7 @@ class CompanySearchMixin:
             self._show_message_list()
             self._set_messages([])
             self._clear_detail_view(f'Loading messages for "{query_key}"...')
+        self._set_company_tabs_enabled(False)
         self.workers.submit(
             lambda q=query_key, token=load_token: self._company_messages_worker(q, token),
             self._on_company_messages_loaded,
@@ -393,10 +394,7 @@ class CompanySearchMixin:
             cache.pop(oldest_key, None)
 
     def _company_query_hints(self, query):
-        if hasattr(self, "_parse_company_query"):
-            kind, value = self._parse_company_query(query)
-        else:
-            kind, value = ("text", (query or "").strip().lower())
+        kind, value = self._parse_company_query(query)
         if not value:
             return None, None
         if kind == "email":

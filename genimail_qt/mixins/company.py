@@ -1,3 +1,4 @@
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton
 
 from genimail.constants import FOLDER_DISPLAY
@@ -145,6 +146,7 @@ class CompanyMixin:
 
     def _refresh_company_sidebar(self):
         self.company_domain_labels = {}
+        self._company_color_map = {}
         entries = self._load_company_queries()
         self.company_entries_visible = []
         for entry in entries:
@@ -154,8 +156,11 @@ class CompanyMixin:
             if not domain:
                 continue
             label = (entry.get("label") or "").strip() or domain
+            color = (entry.get("color") or "").strip() or None
             self.company_domain_labels[domain] = label
-            self.company_entries_visible.append({"domain": domain, "label": label})
+            if color:
+                self._company_color_map[domain] = color
+            self.company_entries_visible.append({"domain": domain, "label": label, "color": color})
 
         if self.company_filter_domain and self.company_filter_domain not in {entry["domain"] for entry in self.company_entries_visible}:
             self._reset_company_state()
@@ -189,6 +194,21 @@ class CompanyMixin:
             btn = QPushButton(entry["label"])
             btn.setObjectName("companyTabButton")
             btn.setCheckable(True)
+            color = (entry.get("color") or "").strip()
+            if color:
+                base = QColor(color)
+                btn.setStyleSheet(
+                    f"QPushButton#companyTabButton {{"
+                    f" background: {base.lighter(180).name()}; border: 2px solid {color};"
+                    f" color: #1b1f24; font-weight: 600;"
+                    f"}}"
+                    f"QPushButton#companyTabButton:hover {{"
+                    f" background: {base.lighter(155).name()}; border-color: {color};"
+                    f"}}"
+                    f"QPushButton#companyTabButton:checked {{"
+                    f" background: {color}; border-color: {color}; color: #ffffff;"
+                    f"}}"
+                )
             btn.clicked.connect(lambda _checked=False, domain=entry["domain"]: self._on_company_tab_clicked(domain))
             self.company_tabs_layout.addWidget(btn)
             self.company_tab_buttons[entry["domain"]] = btn
@@ -249,7 +269,7 @@ class CompanyMixin:
         self.company_folder_filter = normalized
         self._sync_company_folder_filter_checks()
         self._update_company_filter_badge()
-        if self.company_filter_domain and hasattr(self, "_apply_company_folder_filter"):
+        if self.company_filter_domain:
             self._apply_company_folder_filter()
 
     def _on_company_tab_clicked(self, domain):
@@ -271,9 +291,7 @@ class CompanyMixin:
         self._update_company_filter_badge()
         self._show_message_list()
         self._set_status(f"Loading messages for {domain} across folders...")
-        self._set_company_tabs_enabled(False)
-        if hasattr(self, "_load_company_messages_all_folders"):
-            self._load_company_messages_all_folders(domain)
+        self._load_company_messages_all_folders(domain)
 
     def _set_company_tabs_enabled(self, enabled):
         """Enable/disable company tab buttons during loading."""
@@ -359,12 +377,12 @@ class CompanyMixin:
         entries = []
         seen_domains = set()
 
-        def add_entry(domain, label=""):
+        def add_entry(domain, label="", color=None):
             normalized = CompanyMixin._normalize_company_query(domain)
             if not normalized or normalized in seen_domains:
                 return
             seen_domains.add(normalized)
-            entries.append({"domain": normalized, "label": (label or "").strip()})
+            entries.append({"domain": normalized, "label": (label or "").strip(), "color": color or None})
 
         if isinstance(raw, list):
             for item in raw:
@@ -372,7 +390,7 @@ class CompanyMixin:
                     add_entry(item, "")
                     continue
                 if isinstance(item, dict):
-                    add_entry(item.get("domain", ""), item.get("label", ""))
+                    add_entry(item.get("domain", ""), item.get("label", ""), item.get("color"))
         elif isinstance(raw, dict):
             for key in raw.keys():
                 add_entry(key, "")
@@ -386,13 +404,18 @@ class CompanyMixin:
             if isinstance(value, dict):
                 domain = CompanyMixin._normalize_company_query(value.get("domain", ""))
                 label = (value.get("label") or "").strip()
+                color = (value.get("color") or "").strip() or None
             else:
                 domain = CompanyMixin._normalize_company_query(value)
                 label = ""
+                color = None
             if not domain or domain in seen_domains:
                 continue
             seen_domains.add(domain)
-            normalized.append({"domain": domain, "label": label})
+            entry = {"domain": domain, "label": label}
+            if color:
+                entry["color"] = color
+            normalized.append(entry)
         self.config.set("companies", normalized)
 
     def _get_company_domain_set(self, key):
@@ -466,9 +489,19 @@ class CompanyMixin:
             return False
         return any(value in address for address in addresses) or any(value in name for name in names)
 
+    def _company_color_for_message(self, msg):
+        """Return the company color hex for a message, or None."""
+        color_map = getattr(self, "_company_color_map", {})
+        if not color_map:
+            return None
+        address = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
+        if "@" not in address:
+            return None
+        domain = address.split("@", 1)[1]
+        return color_map.get(domain)
+
     def _check_detail_message_visibility(self):
-        if hasattr(self, "_ensure_detail_message_visible"):
-            self._ensure_detail_message_visible()
+        self._ensure_detail_message_visible()
 
 
 __all__ = ["CompanyMixin"]

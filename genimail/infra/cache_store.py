@@ -1,8 +1,12 @@
+import logging
 import os
 import sqlite3
 import threading
 import time
 
+logger = logging.getLogger(__name__)
+
+from genimail.constants import SQL_PARAM_CHUNK_SIZE
 from genimail.paths import CACHE_DB_FILE
 
 
@@ -172,7 +176,7 @@ class EmailCache:
         return " AND ".join(escaped_tokens)
 
     @staticmethod
-    def _chunked(values, size=900):
+    def _chunked(values, size=SQL_PARAM_CHUNK_SIZE):
         for idx in range(0, len(values), size):
             yield values[idx : idx + size]
 
@@ -187,6 +191,12 @@ class EmailCache:
             seen.add(msg_id)
             ordered.append(msg_id)
         return ordered
+
+    _BASE_MESSAGE_SELECT = (
+        "m.id, m.folder_id, m.subject, m.sender_name, m.sender_address, "
+        "m.received_datetime, m.is_read, m.has_attachments, m.body_preview, "
+        "m.importance, m.company_label"
+    )
 
     def _build_company_predicate(self, normalized):
         if "@" in normalized and " " not in normalized:
@@ -261,10 +271,7 @@ class EmailCache:
             limit_clause = "\n               LIMIT ?"
             params.append(int(limit))
         cur = self.conn.execute(
-            f"""SELECT
-                      m.id, m.folder_id, m.subject, m.sender_name, m.sender_address,
-                      m.received_datetime, m.is_read, m.has_attachments, m.body_preview,
-                      m.importance, m.company_label
+            f"""SELECT {self._BASE_MESSAGE_SELECT}
                FROM messages m
                WHERE {company_clause}{search_clause}
                ORDER BY m.received_datetime DESC{limit_clause}""",
@@ -283,10 +290,7 @@ class EmailCache:
             limit_clause = "\n               LIMIT ?"
             params.append(int(limit))
         cur = self.conn.execute(
-            f"""SELECT
-                      m.id, m.folder_id, m.subject, m.sender_name, m.sender_address,
-                      m.received_datetime, m.is_read, m.has_attachments, m.body_preview,
-                      m.importance, m.company_label
+            f"""SELECT {self._BASE_MESSAGE_SELECT}
                FROM messages m
                JOIN message_search_fts f ON f.message_id = m.id
                WHERE {company_clause}
@@ -403,6 +407,7 @@ class EmailCache:
         }
 
     def _rows_to_messages(self, rows):
+        """Convert DB rows to Graph-API-shaped dicts, hydrating recipients via extra queries."""
         messages = [self._row_to_message(row) for row in rows]
         recipient_map = self._recipient_map_for_messages([msg["id"] for msg in messages if msg.get("id")])
         for message in messages:
@@ -654,8 +659,8 @@ class EmailCache:
                         normalized_search,
                         limit=limit,
                     )
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    logger.warning("FTS search failed, falling back to LIKE: %s", exc)
             return self._search_company_messages_like(
                 normalized,
                 search_text=normalized_search,

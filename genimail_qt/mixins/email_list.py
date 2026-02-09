@@ -1,15 +1,149 @@
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton
+from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPen
+from PySide6.QtWidgets import QLabel, QListWidgetItem, QMessageBox, QPushButton, QStyledItemDelegate, QStyle
 
 from genimail.browser.navigation import ensure_light_preview_html, wrap_plain_text_as_html
 from genimail.constants import EMAIL_LIST_FETCH_TOP
 from genimail.domain.helpers import format_date, format_size, strip_html
-from genimail_qt.constants import ATTACHMENT_THUMBNAIL_MAX_INITIAL, ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS
+from genimail_qt.constants import (
+    ATTACHMENT_THUMBNAIL_MAX_INITIAL,
+    ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS,
+    COMPANY_COLOR_STRIPE_WIDTH,
+)
 from genimail_qt.webview_utils import (
     is_inline_attachment,
     normalize_cid_value,
     replace_cid_sources_with_data_urls,
 )
+
+# Column layout constants for the message list delegate
+_STRIPE_W = 6
+_PAD_LEFT = 14
+_DATE_W = 70
+_SENDER_W = 170
+_GAP = 16
+_COLOR_DATE = "#64748b"
+_COLOR_SENDER = "#1b1f24"
+_COLOR_SUBJECT = "#1b1f24"
+_COLOR_PREVIEW = "#8893a4"
+_COLOR_UNREAD_DOT = "#1f6feb"
+
+
+class CompanyColorDelegate(QStyledItemDelegate):
+    """Custom delegate: color stripe + columnar layout (date | sender | subject | preview)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color_map = {}
+
+    def set_color_map(self, color_map):
+        self._color_map = dict(color_map or {})
+
+    @staticmethod
+    def _company_color_for_msg(msg, color_map):
+        if not color_map:
+            return None
+        address = (msg.get("from", {}).get("emailAddress", {}).get("address") or "").strip().lower()
+        if "@" not in address:
+            return None
+        return color_map.get(address.split("@", 1)[1])
+
+    def sizeHint(self, option, index):
+        base = super().sizeHint(option, index)
+        return QSize(base.width(), max(base.height(), 36))
+
+    def paint(self, painter, option, index):
+        painter.save()
+
+        # -- background (selection / alternate) --
+        is_selected = bool(option.state & QStyle.State_Selected)
+        msg = index.data(Qt.UserRole) or {}
+        company_color = self._company_color_for_msg(msg, self._color_map) if isinstance(msg, dict) else None
+
+        if is_selected:
+            painter.fillRect(option.rect, QColor("#dbeafe"))
+        elif company_color:
+            tint = QColor(company_color)
+            tint.setAlpha(22)
+            painter.fillRect(option.rect, tint)
+        elif index.row() % 2 == 1:
+            painter.fillRect(option.rect, QColor("#fbfcfe"))
+
+        # -- color stripe --
+        if company_color:
+            painter.fillRect(
+                QRect(option.rect.left(), option.rect.top(), _STRIPE_W, option.rect.height()),
+                QColor(company_color),
+            )
+
+        # -- text layout --
+        is_unread = isinstance(msg, dict) and not msg.get("isRead", True)
+        base_font = option.font
+        y_center = option.rect.center().y()
+        x = option.rect.left() + _STRIPE_W + _PAD_LEFT
+
+        # Unread dot
+        if is_unread:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(_COLOR_UNREAD_DOT))
+            dot_r = 4
+            painter.drawEllipse(x - 10, y_center - dot_r, dot_r * 2, dot_r * 2)
+
+        fields = index.data(Qt.DisplayRole) or ""
+        parts = fields.split("\x1f") if "\x1f" in fields else [fields]
+        date_text = parts[0] if len(parts) > 0 else ""
+        sender_text = parts[1] if len(parts) > 1 else ""
+        subject_text = parts[2] if len(parts) > 2 else ""
+        preview_text = parts[3] if len(parts) > 3 else ""
+
+        # Date
+        date_font = QFont(base_font)
+        date_font.setPointSize(base_font.pointSize())
+        fm_date = QFontMetrics(date_font)
+        painter.setFont(date_font)
+        painter.setPen(QColor(_COLOR_DATE))
+        date_rect = QRect(x, option.rect.top(), _DATE_W, option.rect.height())
+        painter.drawText(date_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_date.elidedText(date_text, Qt.ElideRight, _DATE_W))
+        x += _DATE_W + _GAP
+
+        # Sender (bold)
+        sender_font = QFont(base_font)
+        sender_font.setBold(True)
+        fm_sender = QFontMetrics(sender_font)
+        painter.setFont(sender_font)
+        painter.setPen(QColor(_COLOR_SENDER))
+        sender_rect = QRect(x, option.rect.top(), _SENDER_W, option.rect.height())
+        painter.drawText(sender_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_sender.elidedText(sender_text, Qt.ElideRight, _SENDER_W))
+        x += _SENDER_W + _GAP
+
+        # Subject (semibold if unread, regular otherwise)
+        subject_font = QFont(base_font)
+        if is_unread:
+            subject_font.setBold(True)
+        remaining = option.rect.right() - x - 8
+        subject_w = min(int(remaining * 0.4), 500) if remaining > 100 else remaining
+        fm_subject = QFontMetrics(subject_font)
+        painter.setFont(subject_font)
+        painter.setPen(QColor(_COLOR_SUBJECT))
+        subject_rect = QRect(x, option.rect.top(), subject_w, option.rect.height())
+        painter.drawText(subject_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_subject.elidedText(subject_text, Qt.ElideRight, subject_w))
+        x += subject_w + _GAP
+
+        # Preview (muted)
+        preview_w = option.rect.right() - x - 8
+        if preview_w > 20:
+            preview_font = QFont(base_font)
+            fm_preview = QFontMetrics(preview_font)
+            painter.setFont(preview_font)
+            painter.setPen(QColor(_COLOR_PREVIEW))
+            preview_rect = QRect(x, option.rect.top(), preview_w, option.rect.height())
+            painter.drawText(preview_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_preview.elidedText(preview_text, Qt.ElideRight, preview_w))
+
+        # Bottom border
+        painter.setPen(QPen(QColor("#eef2f7"), 1))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+
+        painter.restore()
 
 
 class EmailListMixin:
@@ -159,16 +293,24 @@ class EmailListMixin:
     def _render_message_list(self):
         self.filtered_messages = list(self.current_messages)
         self.message_list.clear()
+        self._ensure_company_color_delegate()
         for msg in self.filtered_messages:
             sender = msg.get("from", {}).get("emailAddress", {}).get("name") or "Unknown"
             subject = msg.get("subject") or "(No subject)"
             received = format_date(msg.get("receivedDateTime", ""))
-            unread_prefix = "● " if not msg.get("isRead") else ""
-            preview = self._summarize_preview(msg.get("bodyPreview", ""))
-            line = f"{unread_prefix}{subject}\n{sender} · {received} · {preview}"
+            preview = self._summarize_preview(msg.get("bodyPreview", ""), max_chars=200)
+            # Fields separated by \x1f (unit separator) for the delegate to parse
+            line = f"{received}\x1f{sender}\x1f{subject}\x1f{preview}"
             item = QListWidgetItem(line)
             item.setData(Qt.UserRole, msg)
             self.message_list.addItem(item)
+
+    def _ensure_company_color_delegate(self):
+        if not hasattr(self, "_company_color_delegate"):
+            self._company_color_delegate = CompanyColorDelegate(self.message_list)
+            self.message_list.setItemDelegate(self._company_color_delegate)
+        color_map = getattr(self, "_company_color_map", {})
+        self._company_color_delegate.set_color_map(color_map)
 
     # ------------------------------------------------------------------
     # Message selection and detail
@@ -285,6 +427,14 @@ class EmailListMixin:
         received = format_date(detail.get("receivedDateTime", ""))
         subject = detail.get("subject") or "(No subject)"
         self.message_header.setText(f"{subject}\nFrom: {sender} <{address}> · {received}")
+
+        company_color = self._company_color_for_message(detail) if hasattr(self, "_company_color_for_message") else None
+        if company_color:
+            self.message_header.setStyleSheet(
+                f"border-left: {COMPANY_COLOR_STRIPE_WIDTH}px solid {company_color}; padding-left: 10px;"
+            )
+        else:
+            self.message_header.setStyleSheet("")
 
         body = detail.get("body", {}) or {}
         content_type = (body.get("contentType") or "").lower()
