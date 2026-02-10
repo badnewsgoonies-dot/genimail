@@ -133,6 +133,7 @@ def test_open_doc_preview_sets_path(tmp_path, monkeypatch):
             self.control_path = None
         def setControl(self, path):
             self.control_path = path
+            return True
         def show(self):
             pass
         def hide(self):
@@ -303,3 +304,97 @@ def test_refresh_doc_list_shows_empty_label_when_no_docs(tmp_path, monkeypatch):
     assert probe._doc_list.count() == 0
     assert probe._doc_list._visible is False
     assert probe._doc_empty_label._visible is True
+
+
+# ------------------------------------------------------------------
+# setControl failure fallback
+# ------------------------------------------------------------------
+
+
+def test_open_doc_preview_falls_back_on_setcontrol_failure(tmp_path, monkeypatch):
+    """When setControl() returns False, falls back to open_document_file."""
+    doc = tmp_path / "bad.docx"
+    doc.write_text("data")
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
+
+    opened = []
+    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p))
+
+    class _FailAx:
+        def setControl(self, path):
+            return False
+        def show(self): pass
+        def hide(self): pass
+        def clear(self): pass
+
+    class _FakeLabel:
+        def hide(self): pass
+        def show(self): pass
+
+    class _FakeLayout:
+        def insertWidget(self, idx, w, stretch=0): pass
+
+    probe = _make_probe()
+    probe._doc_preview = _FailAx()
+    probe._doc_preview_layout = _FakeLayout()
+    probe._doc_preview_placeholder = _FakeLabel()
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+
+    assert len(opened) == 1
+    assert probe._doc_preview_path is None  # should not be set on failure
+
+
+# ------------------------------------------------------------------
+# Attachment routing (.doc/.docx → _open_doc_preview)
+# ------------------------------------------------------------------
+
+
+def test_attachment_routes_docx_to_preview(tmp_path, monkeypatch):
+    """_on_open_attachment_ready routes .docx to _open_doc_preview."""
+    from genimail_qt.mixins.attachments import EmailAttachmentMixin
+
+    monkeypatch.setattr("genimail_qt.mixins.attachments.PDF_DIR", str(tmp_path))
+
+    class _Probe(EmailAttachmentMixin):
+        pass
+
+    probe = _Probe()
+    preview_calls = []
+    pdf_calls = []
+
+    probe._open_doc_preview = lambda path, activate=False: preview_calls.append(path)
+    probe._open_pdf_file = lambda path, activate=False: pdf_calls.append(path)
+    probe._set_status = lambda msg: None
+    probe._unique_output_path = staticmethod(lambda d, f: os.path.join(d, f))
+
+    probe._on_open_attachment_ready((b"fake content", "test.docx"))
+
+    assert len(preview_calls) == 1
+    assert preview_calls[0].endswith(".docx")
+    assert len(pdf_calls) == 0
+
+
+def test_attachment_routes_pdf_to_pdf_viewer(tmp_path, monkeypatch):
+    """_on_open_attachment_ready routes .pdf to _open_pdf_file."""
+    from genimail_qt.mixins.attachments import EmailAttachmentMixin
+
+    monkeypatch.setattr("genimail_qt.mixins.attachments.PDF_DIR", str(tmp_path))
+
+    class _Probe(EmailAttachmentMixin):
+        pass
+
+    probe = _Probe()
+    preview_calls = []
+    pdf_calls = []
+
+    probe._open_doc_preview = lambda path, activate=False: preview_calls.append(path)
+    probe._open_pdf_file = lambda path, activate=False: pdf_calls.append(path)
+    probe._set_status = lambda msg: None
+    probe._unique_output_path = staticmethod(lambda d, f: os.path.join(d, f))
+
+    probe._on_open_attachment_ready((b"fake content", "test.pdf"))
+
+    assert len(pdf_calls) == 1
+    assert len(preview_calls) == 0

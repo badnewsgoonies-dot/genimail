@@ -179,14 +179,19 @@ class DocsMixin:
             return
         ax = self._ensure_doc_preview()
         ax.clear()  # release current COM object before loading new one
-        self._doc_preview_path = os.path.abspath(path)
-        ax.setControl(self._doc_preview_path)
+        abs_path = os.path.abspath(path)
+        if not ax.setControl(abs_path):
+            open_document_file(path)
+            if hasattr(self, "_set_status"):
+                self._set_status(f"Preview failed — opened externally: {os.path.basename(path)}")
+            return
+        self._doc_preview_path = abs_path
         ax.show()
         self._doc_preview_placeholder.hide()
         norm = os.path.normpath(path)
         if not norm.startswith(os.path.normpath(QUOTE_DIR)):
             self._add_to_recent(path)
-        self._refresh_doc_list()
+            self._refresh_doc_list()
         if activate and hasattr(self, "workspace_tabs") and hasattr(self, "docs_tab"):
             self.workspace_tabs.setCurrentWidget(self.docs_tab)
         if hasattr(self, "_set_status"):

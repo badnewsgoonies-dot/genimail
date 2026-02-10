@@ -251,22 +251,6 @@ class PdfMixin:
             if not self._has_cal:
                 self._pdf_cal_status.setText("Warning: not calibrated")
 
-    # ── Document opened ──────────────────────────────────────────
-
-    def _on_pdf_doc_opened(self, view):
-        self._pdf_last_active_view = view
-        self._init_pdf_measurement_state()
-        self._load_calibration(view.doc_key)
-        total = view.page_count
-        self._update_pdf_page_label(0, total)
-        self._update_measurement_labels()
-        self._rebuild_rooms_list()
-        self._update_totals()
-        # Ensure tool mode click state matches current radio
-        tool_id = self._pdf_tool_group.checkedId()
-        click_enabled = tool_id in (_TOOL_CALIBRATE, _TOOL_FLOORPLAN)
-        view.set_click_enabled(click_enabled)
-
     # ── Point click routing ──────────────────────────────────────
 
     def _on_pdf_point_clicked(self, x_pt, y_pt):
