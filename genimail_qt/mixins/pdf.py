@@ -36,6 +36,7 @@ class PdfMixin:
     _cal_factor = 1.0
     _has_cal = False
     _cal_start = None  # (x_pt, y_pt) for calibrate first click
+    _pdf_tab_states = None  # {doc_key: {...}} per-tab measurement state
 
     def _init_pdf_measurement_state(self):
         self._poly_points = []
@@ -43,6 +44,37 @@ class PdfMixin:
         self._cal_factor = 1.0
         self._has_cal = False
         self._cal_start = None
+
+    def _save_pdf_tab_state(self, view):
+        """Save current measurement state to per-tab storage."""
+        if self._pdf_tab_states is None:
+            self._pdf_tab_states = {}
+        key = view.doc_key
+        if not key:
+            return
+        self._pdf_tab_states[key] = {
+            "poly_points": list(self._poly_points) if self._poly_points else [],
+            "saved_rooms": list(self._saved_rooms) if hasattr(self, "_saved_rooms") else [],
+            "cal_factor": self._cal_factor,
+            "has_cal": self._has_cal,
+            "cal_start": self._cal_start,
+        }
+
+    def _restore_pdf_tab_state(self, view):
+        """Restore measurement state from per-tab storage, or initialize fresh."""
+        if self._pdf_tab_states is None:
+            self._pdf_tab_states = {}
+        key = view.doc_key
+        state = self._pdf_tab_states.get(key) if key else None
+        if state:
+            self._poly_points = state["poly_points"]
+            self._saved_rooms = state["saved_rooms"]
+            self._cal_factor = state["cal_factor"]
+            self._has_cal = state["has_cal"]
+            self._cal_start = state["cal_start"]
+        else:
+            self._init_pdf_measurement_state()
+            self._load_calibration(key)
 
     # ── Open / create ────────────────────────────────────────────
 
@@ -84,8 +116,6 @@ class PdfMixin:
             self.workspace_tabs.setCurrentWidget(self.pdf_tab)
         self._set_status(f"Opened PDF: {tab_label}")
 
-        self._on_pdf_doc_opened(view)
-
     def _create_pdf_widget(self, normalized_path):
         view = PdfGraphicsView()
         view.open_document(normalized_path)
@@ -105,10 +135,40 @@ class PdfMixin:
                 return idx
         return None
 
+    def _on_pdf_tab_changed(self, index):
+        # Save state from the previously active tab
+        if hasattr(self, "_pdf_last_active_view"):
+            prev = self._pdf_last_active_view
+            if isinstance(prev, PdfGraphicsView):
+                self._save_pdf_tab_state(prev)
+        view = self.pdf_tabs.widget(index)
+        if isinstance(view, PdfGraphicsView):
+            self._pdf_last_active_view = view
+            self._restore_pdf_tab_state(view)
+            total = view.page_count
+            self._update_pdf_page_label(view.current_page, total)
+            self._update_measurement_labels()
+            self._rebuild_rooms_list()
+            self._update_totals()
+            self._redraw_all_room_overlays()
+            # Ensure tool mode click state matches current radio
+            tool_id = self._pdf_tool_group.checkedId()
+            click_enabled = tool_id in (_TOOL_CALIBRATE, _TOOL_FLOORPLAN)
+            view.set_click_enabled(click_enabled)
+            if self._has_cal:
+                self._pdf_cal_status.setText(f"Cal: x{self._cal_factor:.4f}")
+            else:
+                self._pdf_cal_status.setText("Not calibrated")
+        else:
+            self._pdf_last_active_view = None
+            self._update_pdf_page_label(0, 0)
+
     def _on_pdf_tab_close_requested(self, index):
         widget = self.pdf_tabs.widget(index)
         if widget is not None:
             if isinstance(widget, PdfGraphicsView):
+                if self._pdf_tab_states and widget.doc_key:
+                    self._pdf_tab_states.pop(widget.doc_key, None)
                 widget.close_document()
             self.pdf_tabs.removeTab(index)
             widget.deleteLater()
@@ -194,6 +254,7 @@ class PdfMixin:
     # ── Document opened ──────────────────────────────────────────
 
     def _on_pdf_doc_opened(self, view):
+        self._pdf_last_active_view = view
         self._init_pdf_measurement_state()
         self._load_calibration(view.doc_key)
         total = view.page_count
@@ -542,7 +603,11 @@ class PdfMixin:
                 action=lambda p=path: (
                     self._open_pdf_file(p, activate=True)
                     if p.lower().endswith(".pdf")
-                    else open_document_file(p)
+                    else (
+                        self._open_doc_preview(p, activate=True)
+                        if p.lower().endswith((".doc", ".docx")) and hasattr(self, "_open_doc_preview")
+                        else open_document_file(p)
+                    )
                 ),
             )
             if hasattr(self, "_add_download_result_button"):

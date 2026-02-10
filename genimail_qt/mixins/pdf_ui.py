@@ -177,6 +177,7 @@ class PdfUiMixin:
         self.pdf_tabs = QTabWidget()
         self.pdf_tabs.setTabsClosable(True)
         self.pdf_tabs.tabCloseRequested.connect(self._on_pdf_tab_close_requested)
+        self.pdf_tabs.currentChanged.connect(self._on_pdf_tab_changed)
         splitter.addWidget(self.pdf_tabs)
 
         splitter.setStretchFactor(0, 0)

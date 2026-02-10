@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GENImail is a Windows-only desktop hub combining email, internet browsing, PDF viewing, docs/templates, and scanning in one PySide6 application. It integrates with Outlook/Hotmail via Microsoft Graph API using MSAL device code flow.
 
+**Domain**: Construction painting business — email, quotes, PDF plan takeoffs (paint area calculations), scanner integration, company-domain filtering with color-coded labels.
+
 **Tech stack**: Python 3.11+, PySide6 (QtWidgets + QtWebEngine), MSAL + requests (Graph API), PyMuPDF (PDF rendering), pywin32 (WIA scanner + COM), Shapely (takeoff geometry), Pillow, SQLite.
 
 ## Build & Development Commands
@@ -56,6 +58,8 @@ No linter or formatter config exists; follow PEP 8 with 4-space indentation.
   - `theme.py` — All styling (`APP_STYLE` stylesheet; no Qt Designer files)
   - `constants.py` — UI-specific constants: layout margins, icon strings, regex patterns, toast config
   - `takeoff_engine.py` — Paint area calculation for construction takeoffs
+  - `webview_utils.py`, `webview_page.py` — WebEngine helpers (JS console filtering, custom page)
+  - `pdf_graphics_view.py` — Custom QGraphicsView for PDF rendering with measurement overlays
 
 - **Standalone apps** (top-level):
   - `email_app.py` → `email_app_qt.py` — Main application entrypoint
@@ -127,7 +131,7 @@ ProjectError (base, genimail/errors.py)
 ## Testing
 
 - Tests live in `tests/` with `test_*.py` naming; no `conftest.py` or shared fixtures
-- `quick_check.py` validates: py_compile on ~56 curated files → import smoke test → pytest
+- `quick_check.py` validates: py_compile on 57 curated files → import smoke test → pytest
 - Tests are simple: direct function imports + assertions, monkeypatching for mixin isolation
 - No mock framework — tests use plain stubs and attribute patching
 

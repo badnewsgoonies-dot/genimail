@@ -1,6 +1,4 @@
 import os
-import shutil
-import tempfile
 
 from genimail_qt.mixins.docs import DocsMixin, _MAX_RECENT
 
@@ -105,9 +103,9 @@ def test_new_doc_from_template_copies_file(tmp_path, monkeypatch):
     monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(quotes))
 
     probe = _make_probe()
-    # Stub out methods that need Qt
+    # Stub out preview method that needs Qt
     opened_paths = []
-    probe._open_doc_file = lambda path: opened_paths.append(path)
+    probe._open_doc_preview = lambda path, activate=False: opened_paths.append(path)
 
     DocsMixin._new_doc_from_template(probe)
 
@@ -115,6 +113,105 @@ def test_new_doc_from_template_copies_file(tmp_path, monkeypatch):
     assert len(created) == 1
     assert created[0].endswith(".doc")
     assert len(opened_paths) == 1
+
+
+# ------------------------------------------------------------------
+# _open_doc_preview (state management, no Qt widget)
+# ------------------------------------------------------------------
+
+
+def test_open_doc_preview_sets_path(tmp_path, monkeypatch):
+    doc = tmp_path / "test.docx"
+    doc.write_text("data")
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
+
+    probe = _make_probe()
+    # Stub the QAxWidget and label
+    class _FakeAx:
+        def __init__(self):
+            self.control_path = None
+        def setControl(self, path):
+            self.control_path = path
+        def show(self):
+            pass
+        def hide(self):
+            pass
+        def clear(self):
+            self.control_path = None
+
+    class _FakeLabel:
+        def hide(self): pass
+        def show(self): pass
+        def setVisible(self, v): pass
+
+    class _FakeList:
+        def clear(self): pass
+        def addItem(self, item): pass
+        def count(self): return 0
+        def setVisible(self, v): pass
+        def blockSignals(self, b): pass
+
+    class _FakeLayout:
+        def insertWidget(self, idx, w, stretch=0): pass
+
+    ax = _FakeAx()
+    probe._doc_preview = ax
+    probe._doc_preview_layout = _FakeLayout()
+    probe._doc_preview_placeholder = _FakeLabel()
+    probe._doc_list = _FakeList()
+    probe._doc_empty_label = _FakeLabel()
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QListWidgetItem", lambda text="": type("FI", (), {"setData": lambda s, r, v: None, "data": lambda s, r: None, "flags": lambda s: 0xFF, "setFlags": lambda s, f: None})())
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+
+    assert probe._doc_preview_path == os.path.abspath(str(doc))
+    assert ax.control_path == os.path.abspath(str(doc))
+
+
+def test_close_doc_preview_clears_state(tmp_path):
+    probe = _make_probe()
+
+    class _FakeAx:
+        def __init__(self):
+            self.cleared = False
+        def clear(self):
+            self.cleared = True
+        def hide(self):
+            pass
+
+    class _FakeLabel:
+        def __init__(self):
+            self.visible = False
+        def show(self):
+            self.visible = True
+
+    probe._doc_preview = _FakeAx()
+    probe._doc_preview_placeholder = _FakeLabel()
+    probe._doc_preview_path = "C:\\some\\file.docx"
+
+    DocsMixin._close_doc_preview(probe)
+
+    assert probe._doc_preview_path is None
+    assert probe._doc_preview.cleared is True
+    assert probe._doc_preview_placeholder.visible is True
+
+
+def test_open_doc_preview_falls_back_without_layout(tmp_path, monkeypatch):
+    """When _doc_preview_layout doesn't exist, falls back to open_document_file."""
+    doc = tmp_path / "test.docx"
+    doc.write_text("data")
+
+    opened = []
+    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p))
+
+    probe = _make_probe()
+    # No _doc_preview_layout attribute — simulates calling before tab is built
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+
+    assert len(opened) == 1
 
 
 # ------------------------------------------------------------------
@@ -158,8 +255,11 @@ class _FakeListWidget:
     def setVisible(self, v):
         self._visible = v
 
+    def blockSignals(self, b):
+        pass
 
-class _FakeLabel:
+
+class _FakeLabelVis:
     def __init__(self):
         self._visible = True
 
@@ -173,12 +273,11 @@ def test_refresh_doc_list_finds_docs_in_folder(tmp_path, monkeypatch):
     (tmp_path / "c.txt").write_text("data")
 
     monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
-    # Patch QListWidgetItem to our fake so we can inspect data
     monkeypatch.setattr("genimail_qt.mixins.docs.QListWidgetItem", _FakeListItem)
 
     probe = _make_probe()
     probe._doc_list = _FakeListWidget()
-    probe._doc_empty_label = _FakeLabel()
+    probe._doc_empty_label = _FakeLabelVis()
 
     DocsMixin._refresh_doc_list(probe)
 
@@ -197,7 +296,7 @@ def test_refresh_doc_list_shows_empty_label_when_no_docs(tmp_path, monkeypatch):
 
     probe = _make_probe()
     probe._doc_list = _FakeListWidget()
-    probe._doc_empty_label = _FakeLabel()
+    probe._doc_empty_label = _FakeLabelVis()
 
     DocsMixin._refresh_doc_list(probe)
 

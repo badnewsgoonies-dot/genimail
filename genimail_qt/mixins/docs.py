@@ -4,7 +4,8 @@ import subprocess
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QUrl
+from PySide6.QtAxContainer import QAxWidget
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -28,10 +30,13 @@ _RECENT_SEPARATOR = "\u2500\u2500\u2500\u2500 Recently Opened \u2500\u2500\u2500
 
 
 class DocsMixin:
+    _doc_preview_path = None
+
     def _build_docs_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        # ── Toolbar ───────────────────────────────────────────────
         toolbar = QHBoxLayout()
         open_btn = QPushButton("Open Doc")
         new_from_template_btn = QPushButton("New from Template")
@@ -44,36 +49,73 @@ class DocsMixin:
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
+        # ── Splitter: file list | preview ─────────────────────────
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left panel: file list
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(4)
+
         header = QLabel("Documents")
         header.setObjectName("docsHeader")
-        layout.addWidget(header)
+        left_layout.addWidget(header)
 
         self._doc_list = QListWidget()
         self._doc_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        layout.addWidget(self._doc_list, 1)
+        left_layout.addWidget(self._doc_list, 1)
 
         self._doc_empty_label = QLabel(
             "No documents found. Use 'Open Doc' or 'New from Template' to get started."
         )
         self._doc_empty_label.setWordWrap(True)
-        layout.addWidget(self._doc_empty_label)
+        left_layout.addWidget(self._doc_empty_label)
 
-        actions = QHBoxLayout()
-        open_selected_btn = QPushButton("Open Selected")
-        open_selected_btn.setObjectName("primaryButton")
+        left_actions = QHBoxLayout()
         remove_recent_btn = QPushButton("Remove from Recent")
-        actions.addWidget(open_selected_btn)
-        actions.addWidget(remove_recent_btn)
-        actions.addStretch(1)
-        layout.addLayout(actions)
+        left_actions.addWidget(remove_recent_btn)
+        left_actions.addStretch(1)
+        left_layout.addLayout(left_actions)
 
+        splitter.addWidget(left_panel)
+
+        # Right panel: preview (QAxWidget created lazily on first use)
+        right_panel = QWidget()
+        self._doc_preview_layout = QVBoxLayout(right_panel)
+        self._doc_preview_layout.setContentsMargins(0, 0, 0, 0)
+        self._doc_preview_layout.setSpacing(4)
+
+        self._doc_preview = None  # created lazily in _ensure_doc_preview()
+        self._doc_preview_placeholder = QLabel("Select a document to preview it here.")
+        self._doc_preview_placeholder.setAlignment(Qt.AlignCenter)
+        self._doc_preview_layout.addWidget(self._doc_preview_placeholder, 1)
+
+        preview_actions = QHBoxLayout()
+        self._edit_in_word_btn = QPushButton("Edit in Word")
+        self._edit_in_word_btn.setObjectName("primaryButton")
+        self._close_preview_btn = QPushButton("Close Preview")
+        preview_actions.addWidget(self._edit_in_word_btn)
+        preview_actions.addWidget(self._close_preview_btn)
+        preview_actions.addStretch(1)
+        self._doc_preview_layout.addLayout(preview_actions)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([200, 800])
+
+        layout.addWidget(splitter, 1)
+
+        # ── Connections ───────────────────────────────────────────
         open_btn.clicked.connect(self._open_doc_dialog)
         new_from_template_btn.clicked.connect(self._new_doc_from_template)
         open_folder_btn.clicked.connect(self._open_docs_folder)
         refresh_btn.clicked.connect(self._refresh_doc_list)
-        open_selected_btn.clicked.connect(self._open_selected_doc)
         remove_recent_btn.clicked.connect(self._remove_from_recent)
-        self._doc_list.itemDoubleClicked.connect(self._on_doc_list_double_clicked)
+        self._doc_list.currentItemChanged.connect(self._on_doc_list_selection_changed)
+        self._edit_in_word_btn.clicked.connect(self._edit_in_word)
+        self._close_preview_btn.clicked.connect(self._close_doc_preview)
 
         self._refresh_doc_list()
         return tab
@@ -83,6 +125,7 @@ class DocsMixin:
     # ------------------------------------------------------------------
 
     def _refresh_doc_list(self):
+        self._doc_list.blockSignals(True)
         self._doc_list.clear()
         folder_files = []
         if os.path.isdir(QUOTE_DIR):
@@ -111,6 +154,58 @@ class DocsMixin:
         has_items = self._doc_list.count() > 0
         self._doc_list.setVisible(has_items)
         self._doc_empty_label.setVisible(not has_items)
+        self._doc_list.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def _ensure_doc_preview(self):
+        """Lazily create the QAxWidget on first use (avoids blocking app startup)."""
+        if self._doc_preview is not None:
+            return self._doc_preview
+        ax = QAxWidget()
+        self._doc_preview = ax
+        # Insert before the action buttons row (index 0, before placeholder)
+        self._doc_preview_layout.insertWidget(0, ax, 1)
+        ax.hide()
+        return ax
+
+    def _open_doc_preview(self, path, activate=False):
+        if not hasattr(self, "_doc_preview_layout"):
+            open_document_file(path)
+            return
+        if not os.path.isfile(path):
+            return
+        ax = self._ensure_doc_preview()
+        ax.clear()  # release current COM object before loading new one
+        self._doc_preview_path = os.path.abspath(path)
+        ax.setControl(self._doc_preview_path)
+        ax.show()
+        self._doc_preview_placeholder.hide()
+        norm = os.path.normpath(path)
+        if not norm.startswith(os.path.normpath(QUOTE_DIR)):
+            self._add_to_recent(path)
+        self._refresh_doc_list()
+        if activate and hasattr(self, "workspace_tabs") and hasattr(self, "docs_tab"):
+            self.workspace_tabs.setCurrentWidget(self.docs_tab)
+        if hasattr(self, "_set_status"):
+            self._set_status(f"Previewing {os.path.basename(path)}")
+
+    def _close_doc_preview(self):
+        self._doc_preview_path = None
+        if self._doc_preview is not None:
+            self._doc_preview.clear()
+            self._doc_preview.hide()
+        if hasattr(self, "_doc_preview_placeholder"):
+            self._doc_preview_placeholder.show()
+
+    def _edit_in_word(self):
+        if not self._doc_preview_path or not os.path.isfile(self._doc_preview_path):
+            return
+        open_document_file(self._doc_preview_path)
+        if hasattr(self, "_set_status"):
+            self._set_status(f"Opened in Word: {os.path.basename(self._doc_preview_path)}")
 
     # ------------------------------------------------------------------
     # Open actions
@@ -129,37 +224,14 @@ class DocsMixin:
         if not path:
             return
         self.config.set("docs_default_dir", os.path.dirname(path))
-        self._open_doc_file(path)
+        self._open_doc_preview(path, activate=True)
 
-    def _open_doc_file(self, path):
-        if not os.path.isfile(path):
-            QMessageBox.warning(self, "File Not Found", f"Could not find:\n{path}")
+    def _on_doc_list_selection_changed(self, current, previous):
+        if current is None:
             return
-        opened = open_document_file(path)
-        if not opened:
-            QMessageBox.warning(self, "Open Failed", f"Could not open:\n{path}")
-            return
-        norm = os.path.normpath(path)
-        if not norm.startswith(os.path.normpath(QUOTE_DIR)):
-            self._add_to_recent(path)
-        self._refresh_doc_list()
-        if hasattr(self, "workspace_tabs") and hasattr(self, "docs_tab"):
-            self.workspace_tabs.setCurrentWidget(self.docs_tab)
-        if hasattr(self, "_set_status"):
-            self._set_status(f"Opened {os.path.basename(path)}")
-
-    def _open_selected_doc(self):
-        item = self._doc_list.currentItem()
-        if not item:
-            return
-        path = item.data(256)
+        path = current.data(256)
         if path:
-            self._open_doc_file(path)
-
-    def _on_doc_list_double_clicked(self, item):
-        path = item.data(256)
-        if path:
-            self._open_doc_file(path)
+            self._open_doc_preview(path)
 
     # ------------------------------------------------------------------
     # New from template
@@ -183,7 +255,7 @@ class DocsMixin:
         except OSError as exc:
             QMessageBox.critical(self, "Copy Failed", str(exc))
             return
-        self._open_doc_file(dest)
+        self._open_doc_preview(dest, activate=True)
 
     # ------------------------------------------------------------------
     # Folder / recent
@@ -235,7 +307,8 @@ class DocsMixin:
             return
         try:
             subprocess.Popen([sys.executable, scanner_script], cwd=ROOT_DIR)
-            self._set_status("Scanner opened")
+            if hasattr(self, "_set_status"):
+                self._set_status("Scanner opened")
         except Exception as exc:
             QMessageBox.critical(self, "Scanner Launch Failed", str(exc))
 

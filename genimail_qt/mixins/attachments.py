@@ -71,8 +71,11 @@ class EmailAttachmentMixin:
         target_path = self._unique_output_path(PDF_DIR, filename)
         with open(target_path, "wb") as handle:
             handle.write(payload_bytes)
-        if target_path.lower().endswith(".pdf"):
+        lower = target_path.lower()
+        if lower.endswith(".pdf"):
             self._open_pdf_file(target_path, activate=True)
+        elif lower.endswith((".doc", ".docx")) and hasattr(self, "_open_doc_preview"):
+            self._open_doc_preview(target_path, activate=True)
         else:
             open_document_file(target_path)
         self._set_status(f"Opened attachment: {os.path.basename(target_path)}")
@@ -87,7 +90,11 @@ class EmailAttachmentMixin:
         btn.clicked.connect(lambda _checked=False, p=file_path: (
             self._open_pdf_file(p, activate=True)
             if p.lower().endswith(".pdf")
-            else open_document_file(p)
+            else (
+                self._open_doc_preview(p, activate=True)
+                if p.lower().endswith((".doc", ".docx")) and hasattr(self, "_open_doc_preview")
+                else open_document_file(p)
+            )
         ))
         layout = self.download_results_layout
         layout.insertWidget(layout.count() - 1, btn)

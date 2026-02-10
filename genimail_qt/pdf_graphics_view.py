@@ -142,6 +142,9 @@ class PdfGraphicsView(QGraphicsView):
         if self._click_enabled and event.button() == Qt.LeftButton:
             scene_pos = self.mapToScene(event.pos())
             if self._pixmap_item and self._scale > 0:
+                if not self._pixmap_item.boundingRect().contains(scene_pos):
+                    super().mousePressEvent(event)
+                    return
                 x_pt = scene_pos.x() / self._scale
                 y_pt = scene_pos.y() / self._scale
                 self.pointClicked.emit(x_pt, y_pt)
