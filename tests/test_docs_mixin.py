@@ -205,7 +205,7 @@ def test_open_doc_preview_falls_back_without_layout(tmp_path, monkeypatch):
     doc.write_text("data")
 
     opened = []
-    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p))
+    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p) or True)
 
     probe = _make_probe()
     # No _doc_preview_layout attribute — simulates calling before tab is built
@@ -243,6 +243,7 @@ class _FakeListWidget:
     def __init__(self):
         self.items = []
         self._visible = True
+        self._current_item = None
 
     def clear(self):
         self.items = []
@@ -258,6 +259,12 @@ class _FakeListWidget:
 
     def blockSignals(self, b):
         pass
+
+    def setCurrentItem(self, item):
+        self._current_item = item
+
+    def currentItem(self):
+        return self._current_item
 
 
 class _FakeLabelVis:
@@ -306,6 +313,26 @@ def test_refresh_doc_list_shows_empty_label_when_no_docs(tmp_path, monkeypatch):
     assert probe._doc_empty_label._visible is True
 
 
+def test_refresh_doc_list_preserves_selected_path(tmp_path, monkeypatch):
+    a_path = tmp_path / "a.docx"
+    b_path = tmp_path / "b.docx"
+    a_path.write_text("a")
+    b_path.write_text("b")
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
+    monkeypatch.setattr("genimail_qt.mixins.docs.QListWidgetItem", _FakeListItem)
+
+    probe = _make_probe()
+    probe._doc_list = _FakeListWidget()
+    probe._doc_empty_label = _FakeLabelVis()
+
+    DocsMixin._refresh_doc_list(probe, selected_path=str(b_path))
+
+    selected = probe._doc_list.currentItem()
+    assert selected is not None
+    assert os.path.normpath(selected.data(256)) == os.path.normpath(str(b_path))
+
+
 # ------------------------------------------------------------------
 # setControl failure fallback
 # ------------------------------------------------------------------
@@ -319,7 +346,7 @@ def test_open_doc_preview_falls_back_on_setcontrol_failure(tmp_path, monkeypatch
     monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
 
     opened = []
-    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p))
+    monkeypatch.setattr("genimail_qt.mixins.docs.open_document_file", lambda p: opened.append(p) or True)
 
     class _FailAx:
         def setControl(self, path):

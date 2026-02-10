@@ -124,9 +124,15 @@ class DocsMixin:
     # List management
     # ------------------------------------------------------------------
 
-    def _refresh_doc_list(self):
+    def _refresh_doc_list(self, selected_path=None):
         self._doc_list.blockSignals(True)
         self._doc_list.clear()
+        selected_norm = (
+            os.path.normpath(os.path.abspath(selected_path))
+            if isinstance(selected_path, str) and selected_path
+            else None
+        )
+        selected_item = None
         folder_files = []
         if os.path.isdir(QUOTE_DIR):
             for name in sorted(os.listdir(QUOTE_DIR)):
@@ -139,17 +145,24 @@ class DocsMixin:
             item = QListWidgetItem(f"{os.path.basename(path)}    quotes/")
             item.setData(256, path)  # Qt.UserRole == 256
             self._doc_list.addItem(item)
+            if selected_norm and os.path.normpath(os.path.abspath(path)) == selected_norm:
+                selected_item = item
 
         recent = self._get_recent_files()
         if recent:
             sep = QListWidgetItem(_RECENT_SEPARATOR)
-            sep.setFlags(sep.flags() & ~sep.flags())  # non-selectable
+            sep.setFlags(Qt.NoItemFlags)  # non-selectable separator row
             self._doc_list.addItem(sep)
             for path in recent:
                 display_dir = os.path.basename(os.path.dirname(path))
                 item = QListWidgetItem(f"{os.path.basename(path)}    {display_dir}")
                 item.setData(256, path)
                 self._doc_list.addItem(item)
+                if selected_norm and os.path.normpath(os.path.abspath(path)) == selected_norm:
+                    selected_item = item
+
+        if selected_item is not None:
+            self._doc_list.setCurrentItem(selected_item)
 
         has_items = self._doc_list.count() > 0
         self._doc_list.setVisible(has_items)
@@ -173,7 +186,8 @@ class DocsMixin:
 
     def _open_doc_preview(self, path, activate=False):
         if not hasattr(self, "_doc_preview_layout"):
-            open_document_file(path)
+            if not open_document_file(path):
+                QMessageBox.warning(self, "Open Failed", f"Could not open:\n{path}")
             return
         if not os.path.isfile(path):
             return
@@ -181,7 +195,9 @@ class DocsMixin:
         ax.clear()  # release current COM object before loading new one
         abs_path = os.path.abspath(path)
         if not ax.setControl(abs_path):
-            open_document_file(path)
+            self._close_doc_preview()
+            if not open_document_file(path):
+                QMessageBox.warning(self, "Open Failed", f"Could not open:\n{path}")
             if hasattr(self, "_set_status"):
                 self._set_status(f"Preview failed — opened externally: {os.path.basename(path)}")
             return
@@ -191,7 +207,7 @@ class DocsMixin:
         norm = os.path.normpath(path)
         if not norm.startswith(os.path.normpath(QUOTE_DIR)):
             self._add_to_recent(path)
-            self._refresh_doc_list()
+            self._refresh_doc_list(selected_path=abs_path)
         if activate and hasattr(self, "workspace_tabs") and hasattr(self, "docs_tab"):
             self.workspace_tabs.setCurrentWidget(self.docs_tab)
         if hasattr(self, "_set_status"):
@@ -208,7 +224,9 @@ class DocsMixin:
     def _edit_in_word(self):
         if not self._doc_preview_path or not os.path.isfile(self._doc_preview_path):
             return
-        open_document_file(self._doc_preview_path)
+        if not open_document_file(self._doc_preview_path):
+            QMessageBox.warning(self, "Open Failed", f"Could not open:\n{self._doc_preview_path}")
+            return
         if hasattr(self, "_set_status"):
             self._set_status(f"Opened in Word: {os.path.basename(self._doc_preview_path)}")
 
