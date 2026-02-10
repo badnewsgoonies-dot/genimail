@@ -96,6 +96,24 @@ QPushButton#companyInlineButton:hover {
     background: #eff4fc;
     border-color: #9db2d0;
 }
+QPushButton#emailDensityButton {
+    padding: 4px 10px;
+    min-height: 24px;
+    font-size: 12px;
+    background: #f8fafc;
+    border: 1px solid #d7deea;
+    color: #475467;
+}
+QPushButton#emailDensityButton:hover {
+    background: #f1f5ff;
+    border-color: #9db2d0;
+}
+QPushButton#emailDensityButton:checked {
+    background: #e8f0ff;
+    border-color: #7ea6e8;
+    color: #0f3d86;
+    font-weight: 600;
+}
 QScrollArea#companyTabsScroll {
     background: transparent;
 }
@@ -258,7 +276,7 @@ QListWidget#companyList {
     font-size: 14px;
 }
 QListWidget#messageList {
-    font-size: 20px;
+    font-size: 13px;
 }
 QWidget#folderButtonsWidget {
     background: transparent;
@@ -283,8 +301,8 @@ QPushButton#folderButton:checked {
     color: #0f3d86;
 }
 QListWidget#messageList::item {
-    min-height: 34px;
-    padding: 4px 0;
+    min-height: 0;
+    padding: 0;
 }
 QListWidget#messageList::item:selected {
     background: transparent;
@@ -422,6 +440,20 @@ QPushButton#companyInlineButton {
 QPushButton#companyInlineButton:hover {
     background: #1e2733;
     border-color: #5b6572;
+}
+QPushButton#emailDensityButton {
+    background: #151c26;
+    border: 1px solid #3a4149;
+    color: #9aa4b2;
+}
+QPushButton#emailDensityButton:hover {
+    background: #1e2733;
+    border-color: #5b6572;
+}
+QPushButton#emailDensityButton:checked {
+    background: #1d4ed8;
+    border-color: #2563eb;
+    color: #ffffff;
 }
 QPushButton#companyTabButton {
     background: #161b22;

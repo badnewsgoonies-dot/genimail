@@ -17,7 +17,11 @@ from PySide6.QtWidgets import (
 )
 
 from genimail.constants import QT_SPLITTER_LEFT_DEFAULT, QT_SPLITTER_RIGHT_DEFAULT
-from genimail_qt.constants import ATTACHMENT_THUMBNAIL_HEIGHT_PX
+from genimail_qt.constants import (
+    ATTACHMENT_THUMBNAIL_HEIGHT_PX,
+    EMAIL_LIST_DENSITY_COMFORTABLE,
+    EMAIL_LIST_DENSITY_COMPACT,
+)
 
 
 class EmailUiMixin:
@@ -105,7 +109,20 @@ class EmailUiMixin:
         list_layout = QVBoxLayout(list_page)
         list_layout.setContentsMargins(4, 4, 4, 4)
         list_layout.setSpacing(6)
-        list_layout.addWidget(QLabel("Messages"))
+        messages_header_row = QHBoxLayout()
+        messages_header_row.setContentsMargins(0, 0, 0, 0)
+        messages_header_row.setSpacing(8)
+        messages_header_row.addWidget(QLabel("Messages"))
+        messages_header_row.addStretch(1)
+        self.email_density_compact_btn = QPushButton("Compact")
+        self.email_density_compact_btn.setObjectName("emailDensityButton")
+        self.email_density_compact_btn.setCheckable(True)
+        self.email_density_comfortable_btn = QPushButton("Comfortable")
+        self.email_density_comfortable_btn.setObjectName("emailDensityButton")
+        self.email_density_comfortable_btn.setCheckable(True)
+        messages_header_row.addWidget(self.email_density_compact_btn)
+        messages_header_row.addWidget(self.email_density_comfortable_btn)
+        list_layout.addLayout(messages_header_row)
         self.message_list = QListWidget()
         self.message_list.setObjectName("messageList")
         self.message_list.setAlternatingRowColors(False)
@@ -185,6 +202,12 @@ class EmailUiMixin:
         self.manage_companies_btn.clicked.connect(self._open_company_manager)
         self.search_btn.clicked.connect(self._load_messages)
         self.search_input.returnPressed.connect(self._load_messages)
+        self.email_density_compact_btn.clicked.connect(
+            lambda _checked=False: self._on_email_density_button_clicked(EMAIL_LIST_DENSITY_COMPACT)
+        )
+        self.email_density_comfortable_btn.clicked.connect(
+            lambda _checked=False: self._on_email_density_button_clicked(EMAIL_LIST_DENSITY_COMFORTABLE)
+        )
         self.message_list.currentRowChanged.connect(self._on_message_row_changed)
         self.message_list.itemActivated.connect(self._on_message_opened)
         self.back_to_list_btn.clicked.connect(self._show_message_list)
@@ -195,6 +218,7 @@ class EmailUiMixin:
         self.reply_all_btn.clicked.connect(lambda: self._open_compose_dialog("reply_all"))
         self.forward_btn.clicked.connect(lambda: self._open_compose_dialog("forward"))
         self._refresh_company_sidebar()
+        self._set_email_list_density_mode(self._get_email_list_density_mode())
         self._show_message_list()
         if hasattr(self, "_load_search_history"):
             self._load_search_history()

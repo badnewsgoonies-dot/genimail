@@ -9,6 +9,9 @@ from genimail_qt.constants import (
     ATTACHMENT_THUMBNAIL_MAX_INITIAL,
     ATTACHMENT_THUMBNAIL_NAME_MAX_CHARS,
     COMPANY_COLOR_STRIPE_WIDTH,
+    EMAIL_LIST_DENSITY_COMFORTABLE,
+    EMAIL_LIST_DENSITY_COMPACT,
+    EMAIL_LIST_DENSITY_CONFIG_KEY,
     SEARCH_HISTORY_CONFIG_KEY,
 )
 from genimail_qt.webview_utils import (
@@ -17,27 +20,41 @@ from genimail_qt.webview_utils import (
     replace_cid_sources_with_data_urls,
 )
 
-# Column layout constants for the message list delegate
+# Message list delegate layout constants
 _STRIPE_W = 6
-_PAD_LEFT = 14
-_DATE_W = 70
-_SENDER_W = 170
-_GAP = 16
+_PAD_LEFT = 16
+_PAD_RIGHT = 10
+_DATE_MIN_W = 54
+_GAP = 10
+
+_DENSITY_COMPACT = EMAIL_LIST_DENSITY_COMPACT
+_DENSITY_COMFORTABLE = EMAIL_LIST_DENSITY_COMFORTABLE
+_ROW_HEIGHT_COMPACT = 42
+_ROW_HEIGHT_COMFORTABLE = 64
+
+
+def _normalize_density_mode(value):
+    mode = str(value or "").strip().lower()
+    return _DENSITY_COMPACT if mode == _DENSITY_COMPACT else _DENSITY_COMFORTABLE
 
 
 class CompanyColorDelegate(QStyledItemDelegate):
-    """Custom delegate: color stripe + columnar layout (date | sender | subject | preview)."""
+    """Custom delegate with density-aware rendering for the message list."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._color_map = {}
         self._is_dark_mode = False
+        self._density_mode = _DENSITY_COMFORTABLE
 
     def set_color_map(self, color_map):
         self._color_map = dict(color_map or {})
 
     def set_theme_mode(self, mode):
         self._is_dark_mode = str(mode or "").strip().lower() == "dark"
+
+    def set_density_mode(self, mode):
+        self._density_mode = _normalize_density_mode(mode)
 
     @staticmethod
     def _company_color_for_msg(msg, color_map):
@@ -61,8 +78,58 @@ class CompanyColorDelegate(QStyledItemDelegate):
         return None
 
     def sizeHint(self, option, index):
-        base = super().sizeHint(option, index)
-        return QSize(base.width(), max(base.height(), 36))
+        _ = index
+        row_height = _ROW_HEIGHT_COMPACT if self._density_mode == _DENSITY_COMPACT else _ROW_HEIGHT_COMFORTABLE
+        return QSize(max(0, option.rect.width()), row_height)
+
+    @staticmethod
+    def _font(base_font, pixel_size, *, bold=False):
+        font = QFont(base_font)
+        font.setPixelSize(pixel_size)
+        font.setBold(bold)
+        return font
+
+    @staticmethod
+    def _compute_compact_geometry(row_rect, date_text, date_font):
+        fm_date = QFontMetrics(date_font)
+        date_w = max(_DATE_MIN_W, min(96, fm_date.horizontalAdvance(date_text) + 10))
+        date_rect = QRect(row_rect.right() - date_w + 1, row_rect.top(), date_w, row_rect.height())
+
+        sender_w_target = int(row_rect.width() * 0.30)
+        sender_w = max(90, min(220, sender_w_target))
+        sender_w = max(20, min(sender_w, date_rect.left() - row_rect.left() - _GAP))
+        sender_rect = QRect(row_rect.left(), row_rect.top(), sender_w, row_rect.height())
+
+        body_x = sender_rect.right() + 1 + _GAP
+        body_w = date_rect.left() - body_x - _GAP
+        body_w = max(0, body_w)
+        body_rect = QRect(body_x, row_rect.top(), body_w, row_rect.height())
+        return date_rect, sender_rect, body_rect, fm_date
+
+    @staticmethod
+    def _compute_comfortable_geometry(row_rect, date_text, date_font, preview_text):
+        top_pad = 6
+        line_gap = 4
+        line1_h = 20
+        line2_h = max(16, row_rect.height() - top_pad - line_gap - line1_h - 4)
+        line1_y = row_rect.top() + top_pad
+        line2_y = line1_y + line1_h + line_gap
+
+        fm_date = QFontMetrics(date_font)
+        date_w = max(_DATE_MIN_W, min(108, fm_date.horizontalAdvance(date_text) + 10))
+        date_rect = QRect(row_rect.right() - date_w + 1, line1_y, date_w, line1_h)
+        sender_w = max(20, date_rect.left() - row_rect.left() - _GAP)
+        sender_rect = QRect(row_rect.left(), line1_y, sender_w, line1_h)
+
+        line2_left = row_rect.left()
+        line2_w = row_rect.width()
+        subject_w = line2_w if not preview_text else int(line2_w * 0.48)
+        subject_w = max(40, min(subject_w, line2_w))
+        subject_rect = QRect(line2_left, line2_y, subject_w, line2_h)
+        preview_x = subject_rect.right() + 1 + _GAP
+        preview_w = max(0, row_rect.right() - preview_x + 1)
+        preview_rect = QRect(preview_x, line2_y, preview_w, line2_h)
+        return date_rect, sender_rect, subject_rect, preview_rect, fm_date
 
     def paint(self, painter, option, index):
         painter.save()
@@ -91,67 +158,104 @@ class CompanyColorDelegate(QStyledItemDelegate):
                 QColor(company_color),
             )
 
-        # -- text layout --
+        # -- parse payload --
         is_unread = isinstance(msg, dict) and not msg.get("isRead", True)
-        base_font = option.font
-        y_center = option.rect.center().y()
-        x = option.rect.left() + _STRIPE_W + _PAD_LEFT
-
-        # Unread dot
-        if is_unread:
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#58a6ff" if dark_mode else "#1f6feb"))
-            dot_r = 4
-            painter.drawEllipse(x - 10, y_center - dot_r, dot_r * 2, dot_r * 2)
-
         fields = index.data(Qt.DisplayRole) or ""
         parts = fields.split("\x1f") if "\x1f" in fields else [fields]
         date_text = parts[0] if len(parts) > 0 else ""
         sender_text = parts[1] if len(parts) > 1 else ""
         subject_text = parts[2] if len(parts) > 2 else ""
         preview_text = parts[3] if len(parts) > 3 else ""
+        row_rect = option.rect.adjusted(_STRIPE_W + _PAD_LEFT, 0, -_PAD_RIGHT, 0)
+        if row_rect.width() <= 8:
+            painter.restore()
+            return
 
-        # Date
-        date_font = QFont(base_font)
-        fm_date = QFontMetrics(date_font)
-        painter.setFont(date_font)
-        painter.setPen(QColor("#9aa4b2" if dark_mode else "#64748b"))
-        date_rect = QRect(x, option.rect.top(), _DATE_W, option.rect.height())
-        painter.drawText(date_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_date.elidedText(date_text, Qt.ElideRight, _DATE_W))
-        x += _DATE_W + _GAP
-
-        # Sender (bold)
-        sender_font = QFont(base_font)
-        sender_font.setBold(True)
-        fm_sender = QFontMetrics(sender_font)
-        painter.setFont(sender_font)
-        painter.setPen(QColor("#e6edf3" if dark_mode else "#1b1f24"))
-        sender_rect = QRect(x, option.rect.top(), _SENDER_W, option.rect.height())
-        painter.drawText(sender_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_sender.elidedText(sender_text, Qt.ElideRight, _SENDER_W))
-        x += _SENDER_W + _GAP
-
-        # Subject (semibold if unread, regular otherwise)
-        subject_font = QFont(base_font)
+        # Unread dot
         if is_unread:
-            subject_font.setBold(True)
-        remaining = option.rect.right() - x - 8
-        subject_w = min(int(remaining * 0.4), 500) if remaining > 100 else remaining
-        fm_subject = QFontMetrics(subject_font)
-        painter.setFont(subject_font)
-        painter.setPen(QColor("#f0f6fc" if dark_mode else "#1b1f24"))
-        subject_rect = QRect(x, option.rect.top(), subject_w, option.rect.height())
-        painter.drawText(subject_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_subject.elidedText(subject_text, Qt.ElideRight, subject_w))
-        x += subject_w + _GAP
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#58a6ff" if dark_mode else "#1f6feb"))
+            dot_r = 4
+            dot_center_y = row_rect.center().y() if self._density_mode == _DENSITY_COMPACT else row_rect.top() + 14
+            painter.drawEllipse(row_rect.left() - 11, dot_center_y - dot_r, dot_r * 2, dot_r * 2)
 
-        # Preview (muted)
-        preview_w = option.rect.right() - x - 8
-        if preview_w > 20:
-            preview_font = QFont(base_font)
-            fm_preview = QFontMetrics(preview_font)
-            painter.setFont(preview_font)
-            painter.setPen(QColor("#8b949e" if dark_mode else "#8893a4"))
-            preview_rect = QRect(x, option.rect.top(), preview_w, option.rect.height())
-            painter.drawText(preview_rect, Qt.AlignLeft | Qt.AlignVCenter, fm_preview.elidedText(preview_text, Qt.ElideRight, preview_w))
+        base_font = option.font
+        sender_color = QColor("#e6edf3" if dark_mode else "#111827")
+        date_color = QColor("#9aa4b2" if dark_mode else "#64748b")
+        subject_color = QColor("#f0f6fc" if dark_mode else "#0f172a")
+        preview_color = QColor("#8b949e" if dark_mode else "#6b7280")
+
+        if self._density_mode == _DENSITY_COMPACT:
+            sender_font = self._font(base_font, 13, bold=True)
+            date_font = self._font(base_font, 11)
+            body_font = self._font(base_font, 12, bold=is_unread)
+
+            date_rect, sender_rect, body_rect, fm_date = self._compute_compact_geometry(row_rect, date_text, date_font)
+            body_text = subject_text
+            if preview_text and preview_text != "No preview available":
+                body_text = f"{subject_text} · {preview_text}"
+
+            painter.setFont(sender_font)
+            painter.setPen(sender_color)
+            painter.drawText(
+                sender_rect,
+                Qt.AlignLeft | Qt.AlignVCenter,
+                QFontMetrics(sender_font).elidedText(sender_text, Qt.ElideRight, sender_rect.width()),
+            )
+            painter.setFont(date_font)
+            painter.setPen(date_color)
+            painter.drawText(
+                date_rect,
+                Qt.AlignRight | Qt.AlignVCenter,
+                fm_date.elidedText(date_text, Qt.ElideRight, date_rect.width()),
+            )
+            if body_rect.width() > 12:
+                painter.setFont(body_font)
+                painter.setPen(subject_color)
+                painter.drawText(
+                    body_rect,
+                    Qt.AlignLeft | Qt.AlignVCenter,
+                    QFontMetrics(body_font).elidedText(body_text, Qt.ElideRight, body_rect.width()),
+                )
+        else:
+            sender_font = self._font(base_font, 14, bold=True)
+            date_font = self._font(base_font, 11)
+            subject_font = self._font(base_font, 13, bold=is_unread)
+            preview_font = self._font(base_font, 12)
+
+            date_rect, sender_rect, subject_rect, preview_rect, fm_date = self._compute_comfortable_geometry(
+                row_rect, date_text, date_font, preview_text
+            )
+
+            painter.setFont(sender_font)
+            painter.setPen(sender_color)
+            painter.drawText(
+                sender_rect,
+                Qt.AlignLeft | Qt.AlignVCenter,
+                QFontMetrics(sender_font).elidedText(sender_text, Qt.ElideRight, sender_rect.width()),
+            )
+            painter.setFont(date_font)
+            painter.setPen(date_color)
+            painter.drawText(
+                date_rect,
+                Qt.AlignRight | Qt.AlignVCenter,
+                fm_date.elidedText(date_text, Qt.ElideRight, date_rect.width()),
+            )
+            painter.setFont(subject_font)
+            painter.setPen(subject_color)
+            painter.drawText(
+                subject_rect,
+                Qt.AlignLeft | Qt.AlignVCenter,
+                QFontMetrics(subject_font).elidedText(subject_text, Qt.ElideRight, subject_rect.width()),
+            )
+            if preview_rect.width() > 16:
+                painter.setFont(preview_font)
+                painter.setPen(preview_color)
+                painter.drawText(
+                    preview_rect,
+                    Qt.AlignLeft | Qt.AlignVCenter,
+                    QFontMetrics(preview_font).elidedText(preview_text, Qt.ElideRight, preview_rect.width()),
+                )
 
         # Bottom border
         painter.setPen(QPen(QColor("#283242" if dark_mode else "#eef2f7"), 1))
@@ -351,6 +455,47 @@ class EmailListMixin:
         self._load_search_history()
 
     # ------------------------------------------------------------------
+    # List density
+    # ------------------------------------------------------------------
+
+    def _get_email_list_density_mode(self):
+        mode = getattr(self, "_email_list_density", None)
+        if mode is not None:
+            return _normalize_density_mode(mode)
+        raw = _DENSITY_COMFORTABLE
+        if hasattr(self, "config"):
+            raw = self.config.get(EMAIL_LIST_DENSITY_CONFIG_KEY, _DENSITY_COMFORTABLE)
+        mode = _normalize_density_mode(raw)
+        self._email_list_density = mode
+        return mode
+
+    def _set_email_list_density_mode(self, mode, persist=False):
+        normalized = _normalize_density_mode(mode)
+        self._email_list_density = normalized
+        if hasattr(self, "_company_color_delegate"):
+            self._company_color_delegate.set_density_mode(normalized)
+        if hasattr(self, "message_list"):
+            self.message_list.doItemsLayout()
+            self.message_list.viewport().update()
+        self._sync_email_density_buttons()
+        if persist and hasattr(self, "config"):
+            self.config.set(EMAIL_LIST_DENSITY_CONFIG_KEY, normalized)
+
+    def _sync_email_density_buttons(self):
+        if not hasattr(self, "email_density_compact_btn") or not hasattr(self, "email_density_comfortable_btn"):
+            return
+        mode = self._get_email_list_density_mode()
+        self.email_density_compact_btn.blockSignals(True)
+        self.email_density_compact_btn.setChecked(mode == _DENSITY_COMPACT)
+        self.email_density_compact_btn.blockSignals(False)
+        self.email_density_comfortable_btn.blockSignals(True)
+        self.email_density_comfortable_btn.setChecked(mode == _DENSITY_COMFORTABLE)
+        self.email_density_comfortable_btn.blockSignals(False)
+
+    def _on_email_density_button_clicked(self, mode):
+        self._set_email_list_density_mode(mode, persist=True)
+
+    # ------------------------------------------------------------------
     # Message list rendering
     # ------------------------------------------------------------------
 
@@ -376,6 +521,7 @@ class EmailListMixin:
         color_map = getattr(self, "_company_color_map", {})
         self._company_color_delegate.set_color_map(color_map)
         self._company_color_delegate.set_theme_mode(getattr(self, "_theme_mode", "light"))
+        self._company_color_delegate.set_density_mode(self._get_email_list_density_mode())
 
     # ------------------------------------------------------------------
     # Message selection and detail
@@ -623,6 +769,8 @@ class EmailListMixin:
         self.email_preview.setHtml(f"<html><body style='font-family:Segoe UI;'>{message}</body></html>")
         self.attachment_list.clear()
         self._render_attachment_thumbnails([])
+        if hasattr(self, "_clear_download_results"):
+            self._clear_download_results()
 
 
 __all__ = ["EmailListMixin"]
