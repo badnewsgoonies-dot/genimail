@@ -14,7 +14,7 @@ from genimail.com_runtime import ensure_sta_apartment
 class BrowserController:
     """WebView2-backed browser host for a single embedded surface."""
 
-    def __init__(self, root, bg_color="#ffffff"):
+    def __init__(self, root, bg_color="#FAF8F5"):
         self.root = root
         self.bg_color = bg_color
         self._main_parent = None

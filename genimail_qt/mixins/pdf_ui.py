@@ -83,7 +83,7 @@ class PdfUiMixin:
         # Separator
         sep1 = QLabel("")
         sep1.setFixedHeight(1)
-        sep1.setStyleSheet("background: #dfe3ea;")
+        sep1.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep1)
 
         # Calibration section
@@ -96,7 +96,7 @@ class PdfUiMixin:
         # Separator
         sep2 = QLabel("")
         sep2.setFixedHeight(1)
-        sep2.setStyleSheet("background: #dfe3ea;")
+        sep2.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep2)
 
         # Wall height
@@ -111,7 +111,7 @@ class PdfUiMixin:
         # Current shape section
         sep3 = QLabel("")
         sep3.setFixedHeight(1)
-        sep3.setStyleSheet("background: #dfe3ea;")
+        sep3.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep3)
         tp_layout.addWidget(QLabel("Current Shape:"))
 
@@ -131,7 +131,7 @@ class PdfUiMixin:
         # Rooms list
         sep4 = QLabel("")
         sep4.setFixedHeight(1)
-        sep4.setStyleSheet("background: #dfe3ea;")
+        sep4.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep4)
         tp_layout.addWidget(QLabel("Rooms:"))
 
@@ -144,7 +144,7 @@ class PdfUiMixin:
         # Totals
         sep5 = QLabel("")
         sep5.setFixedHeight(1)
-        sep5.setStyleSheet("background: #dfe3ea;")
+        sep5.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep5)
         tp_layout.addWidget(QLabel("Totals:"))
 
@@ -159,7 +159,7 @@ class PdfUiMixin:
         # Room management buttons
         sep6 = QLabel("")
         sep6.setFixedHeight(1)
-        sep6.setStyleSheet("background: #dfe3ea;")
+        sep6.setStyleSheet("background: #E8E4DE;")
         tp_layout.addWidget(sep6)
 
         self._pdf_remove_room_btn = QPushButton("Remove Selected")

@@ -1,4 +1,7 @@
+import faulthandler
 import sys
+
+faulthandler.enable()  # Dump traceback on segfault/crash to stderr
 
 try:
     from PySide6.QtWidgets import QApplication

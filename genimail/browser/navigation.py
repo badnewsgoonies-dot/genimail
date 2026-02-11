@@ -11,9 +11,9 @@ LIGHT_PREVIEW_STYLE = (
     "<meta name='supported-color-schemes' content='light'>"
     "<style id='genimail-light-preview-style'>"
     ":root{color-scheme:light !important;}"
-    "html,body{background:#ffffff !important;color:#1f2937 !important;}"
+    "html,body{background:#FAF8F5 !important;color:#3D405B !important;}"
     "body{margin:12px;font-family:'Segoe UI',Arial,sans-serif;line-height:1.35;}"
-    "a{color:#0b57d0 !important;}"
+    "a{color:#C96A52 !important;}"
     "img{max-width:100%;height:auto;}"
     "</style>"
 )

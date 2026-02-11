@@ -31,8 +31,11 @@ _RECENT_SEPARATOR = "\u2500\u2500\u2500\u2500 Recently Opened \u2500\u2500\u2500
 
 class DocsMixin:
     _doc_preview_path = None
+    _doc_preview_request_id = 0
+    _docs_closing = False
 
     def _build_docs_tab(self):
+        self._docs_closing = False
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
@@ -173,6 +176,15 @@ class DocsMixin:
     # Preview
     # ------------------------------------------------------------------
 
+    def _next_doc_preview_request_id(self):
+        next_request_id = int(getattr(self, "_doc_preview_request_id", 0)) + 1
+        self._doc_preview_request_id = next_request_id
+        return next_request_id
+
+    def _docs_cleanup(self):
+        self._docs_closing = True
+        self._next_doc_preview_request_id()
+
     def _ensure_doc_preview(self):
         """Lazily create the QAxWidget on first use (avoids blocking app startup)."""
         if self._doc_preview is not None:
@@ -184,22 +196,40 @@ class DocsMixin:
         ax.hide()
         return ax
 
-    def _open_doc_preview(self, path, activate=False):
+    def _open_doc_preview(self, path, activate=False, request_id=None):
+        if getattr(self, "_docs_closing", False):
+            return
+        if request_id is None:
+            request_id = self._next_doc_preview_request_id()
+        if request_id != int(getattr(self, "_doc_preview_request_id", 0)):
+            return
         if not hasattr(self, "_doc_preview_layout"):
             if not open_document_file(path):
                 QMessageBox.warning(self, "Open Failed", f"Could not open:\n{path}")
             return
         if not os.path.isfile(path):
             return
+        abs_path = os.path.abspath(path)
+        if self._doc_preview_path and os.path.normpath(self._doc_preview_path) == os.path.normpath(abs_path):
+            if activate and hasattr(self, "workspace_tabs") and hasattr(self, "docs_tab"):
+                self.workspace_tabs.setCurrentWidget(self.docs_tab)
+            if hasattr(self, "_set_status"):
+                self._set_status(f"Previewing {os.path.basename(path)}")
+            return
+        if request_id != int(getattr(self, "_doc_preview_request_id", 0)):
+            return
         ax = self._ensure_doc_preview()
         ax.clear()  # release current COM object before loading new one
-        abs_path = os.path.abspath(path)
         if not ax.setControl(abs_path):
+            if request_id != int(getattr(self, "_doc_preview_request_id", 0)):
+                return
             self._close_doc_preview()
             if not open_document_file(path):
                 QMessageBox.warning(self, "Open Failed", f"Could not open:\n{path}")
             if hasattr(self, "_set_status"):
                 self._set_status(f"Preview failed — opened externally: {os.path.basename(path)}")
+            return
+        if request_id != int(getattr(self, "_doc_preview_request_id", 0)):
             return
         self._doc_preview_path = abs_path
         ax.show()
@@ -250,11 +280,14 @@ class DocsMixin:
         self._open_doc_preview(path, activate=True)
 
     def _on_doc_list_selection_changed(self, current, previous):
+        if getattr(self, "_docs_closing", False):
+            return
         if current is None:
             return
         path = current.data(256)
         if path:
-            self._open_doc_preview(path)
+            request_id = self._next_doc_preview_request_id()
+            self._open_doc_preview(path, request_id=request_id)
 
     # ------------------------------------------------------------------
     # New from template

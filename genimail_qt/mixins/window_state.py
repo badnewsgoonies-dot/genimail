@@ -16,6 +16,9 @@ class WindowStateMixin:
 
     def closeEvent(self, event):
         self._poll_timer.stop()
+        docs_cleanup = getattr(self, "_docs_cleanup", None)
+        if callable(docs_cleanup):
+            docs_cleanup()
         if hasattr(self, "thread_pool"):
             self.thread_pool.waitForDone(2000)
         graph = getattr(self, "graph", None)

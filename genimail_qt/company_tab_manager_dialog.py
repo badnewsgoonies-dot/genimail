@@ -95,7 +95,7 @@ class CompanyTabManagerDialog(QDialog):
         none_btn.setChecked(True)
         none_btn.setStyleSheet(
             f"QPushButton {{ border-radius: {sz // 2}px; font-size: 11px; padding: 0; min-height: 0; }}"
-            f"QPushButton:checked {{ border: 2px solid #1f6feb; font-weight: 700; }}"
+            f"QPushButton:checked {{ border: 2px solid #E07A5F; font-weight: 700; }}"
         )
         none_btn.clicked.connect(lambda: self._select_color(None))
         color_row.addWidget(none_btn)
@@ -109,8 +109,8 @@ class CompanyTabManagerDialog(QDialog):
             btn.setStyleSheet(
                 f"QPushButton {{ background: {hex_color}; border: 2px solid {hex_color};"
                 f" border-radius: {sz // 2}px; min-height: 0; padding: 0; }}"
-                f"QPushButton:hover {{ border-color: #1b1f24; }}"
-                f"QPushButton:checked {{ border: 3px solid #1b1f24; }}"
+                f"QPushButton:hover {{ border-color: #E8E4DE; }}"
+                f"QPushButton:checked {{ border: 3px solid #E8E4DE; }}"
             )
             btn.clicked.connect(lambda _checked=False, c=hex_color: self._select_color(c))
             color_row.addWidget(btn)

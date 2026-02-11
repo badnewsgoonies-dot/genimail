@@ -31,5 +31,5 @@ def test_style_for_theme_light_matches_default_style():
 
 def test_style_for_theme_dark_includes_dark_palette_overrides():
     style = style_for_theme(THEME_DARK)
-    assert "background-color: #0d1117;" in style
+    assert "background-color: #1A1814;" in style
     assert "QPushButton#themeToggleButton:checked" in style

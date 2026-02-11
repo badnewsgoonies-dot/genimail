@@ -139,8 +139,8 @@ class CompanyColorDelegate(QStyledItemDelegate):
         is_selected = bool(option.state & QStyle.State_Selected)
         msg = index.data(Qt.UserRole) or {}
         company_color = self._company_color_for_msg(msg, self._color_map) if isinstance(msg, dict) else None
-        selection_color = QColor("#1f2937" if dark_mode else "#dbeafe")
-        alternate_color = QColor("#141b24" if dark_mode else "#fbfcfe")
+        selection_color = QColor("#3A302A" if dark_mode else "#F4D1C7")
+        alternate_color = QColor("#1E1B16" if dark_mode else "#FAF8F5")
 
         if is_selected:
             painter.fillRect(option.rect, selection_color)
@@ -174,16 +174,16 @@ class CompanyColorDelegate(QStyledItemDelegate):
         # Unread dot
         if is_unread:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#58a6ff" if dark_mode else "#1f6feb"))
+            painter.setBrush(QColor("#E07A5F" if dark_mode else "#E07A5F"))
             dot_r = 4
             dot_center_y = row_rect.center().y() if self._density_mode == _DENSITY_COMPACT else row_rect.top() + 14
             painter.drawEllipse(row_rect.left() - 11, dot_center_y - dot_r, dot_r * 2, dot_r * 2)
 
         base_font = option.font
-        sender_color = QColor("#e6edf3" if dark_mode else "#111827")
-        date_color = QColor("#9aa4b2" if dark_mode else "#64748b")
-        subject_color = QColor("#f0f6fc" if dark_mode else "#0f172a")
-        preview_color = QColor("#8b949e" if dark_mode else "#6b7280")
+        sender_color = QColor("#E8E4DE" if dark_mode else "#3D405B")
+        date_color = QColor("#A0A3B5" if dark_mode else "#A0A3B5")
+        subject_color = QColor("#E8E4DE" if dark_mode else "#3D405B")
+        preview_color = QColor("#A0A3B5" if dark_mode else "#6B6E8A")
 
         if self._density_mode == _DENSITY_COMPACT:
             sender_font = self._font(base_font, 13, bold=True)
@@ -258,7 +258,7 @@ class CompanyColorDelegate(QStyledItemDelegate):
                 )
 
         # Bottom border
-        painter.setPen(QPen(QColor("#283242" if dark_mode else "#eef2f7"), 1))
+        painter.setPen(QPen(QColor("#3A352E" if dark_mode else "#E8E4DE"), 1))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
 
         painter.restore()
@@ -714,9 +714,9 @@ class EmailListMixin:
         mime_type = (attachment.get("contentType") or "").lower()
         size_text = format_size(attachment.get("size") or 0)
         short_name = self._truncate_attachment_name(name)
-        icon_text = self._attachment_type_label(mime_type)
+        type_label = self._attachment_type_label(mime_type)
 
-        button = QPushButton(f"[{icon_text}]\\n{short_name}")
+        button = QPushButton(f"{type_label}\n{short_name}\n{size_text}")
         button.setObjectName("attachmentThumbnail")
         button.setToolTip(f"{name} ({size_text})")
         button.clicked.connect(lambda _checked=False, att=attachment: self._on_thumbnail_clicked(att))

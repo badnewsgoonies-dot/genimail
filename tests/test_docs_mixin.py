@@ -425,3 +425,88 @@ def test_attachment_routes_pdf_to_pdf_viewer(tmp_path, monkeypatch):
 
     assert len(pdf_calls) == 1
     assert len(preview_calls) == 0
+
+
+# ------------------------------------------------------------------
+# Docs hardening: short-circuit, stale token, shutdown safety
+# ------------------------------------------------------------------
+
+
+def test_open_doc_preview_short_circuits_when_same_path(tmp_path, monkeypatch):
+    """Re-previewing the same file should NOT call setControl again."""
+    doc = tmp_path / "same.docx"
+    doc.write_text("data")
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QUOTE_DIR", str(tmp_path))
+
+    class _CountAx:
+        def __init__(self):
+            self.set_count = 0
+            self.control_path = None
+        def setControl(self, path):
+            self.set_count += 1
+            self.control_path = path
+            return True
+        def show(self): pass
+        def hide(self): pass
+        def clear(self): self.control_path = None
+
+    class _FakeLabel:
+        def hide(self): pass
+        def show(self): pass
+        def setVisible(self, v): pass
+
+    class _FakeList:
+        def clear(self): pass
+        def addItem(self, item): pass
+        def count(self): return 0
+        def setVisible(self, v): pass
+        def blockSignals(self, b): pass
+
+    class _FakeLayout:
+        def insertWidget(self, idx, w, stretch=0): pass
+
+    monkeypatch.setattr("genimail_qt.mixins.docs.QListWidgetItem", _FakeListItem)
+
+    probe = _make_probe()
+    ax = _CountAx()
+    probe._doc_preview = ax
+    probe._doc_preview_layout = _FakeLayout()
+    probe._doc_preview_placeholder = _FakeLabel()
+    probe._doc_list = _FakeList()
+    probe._doc_empty_label = _FakeLabel()
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+    assert ax.set_count == 1
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+    assert ax.set_count == 1  # short-circuited
+
+
+def test_open_doc_preview_ignores_stale_request_id(tmp_path, monkeypatch):
+    """A preview call with an outdated request_id should be discarded."""
+    doc = tmp_path / "stale.docx"
+    doc.write_text("data")
+
+    probe = _make_probe()
+    probe._doc_preview_layout = True  # just needs to exist for hasattr
+    probe._doc_preview_request_id = 5
+
+    DocsMixin._open_doc_preview(probe, str(doc), request_id=3)
+
+    assert probe._doc_preview_path is None  # never set — stale request discarded
+
+
+def test_docs_cleanup_blocks_future_preview_requests(tmp_path, monkeypatch):
+    """After _docs_cleanup, preview requests should be no-ops."""
+    doc = tmp_path / "blocked.docx"
+    doc.write_text("data")
+
+    probe = _make_probe()
+    probe._doc_preview_layout = True
+
+    DocsMixin._docs_cleanup(probe)
+
+    DocsMixin._open_doc_preview(probe, str(doc))
+
+    assert probe._doc_preview_path is None

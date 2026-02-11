@@ -227,7 +227,7 @@ class CompanyManagerDialog(QDialog):
             QMessageBox.information(self, "No Selection", "Select a domain first.")
             return
         colors_cfg = self.config.get("company_colors", {}) or {}
-        initial = QColor(colors_cfg.get(domain) or "#1f6feb")
+        initial = QColor(colors_cfg.get(domain) or "#E07A5F")
         selected = QColorDialog.getColor(initial, self, f"Choose color for @{domain}")
         if not selected.isValid():
             return

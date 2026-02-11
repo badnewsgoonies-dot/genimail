@@ -194,7 +194,7 @@ class CompanyMixin:
                 btn.setStyleSheet(
                     f"QPushButton#companyTabButton {{"
                     f" background: {base.lighter(180).name()}; border: 2px solid {color};"
-                    f" color: #1b1f24; font-weight: 600;"
+                    f" color: #3D405B; font-weight: 600;"
                     f"}}"
                     f"QPushButton#companyTabButton:hover {{"
                     f" background: {base.lighter(155).name()}; border-color: {color};"

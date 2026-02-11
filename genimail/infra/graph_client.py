@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import webbrowser
 from datetime import timezone
@@ -66,6 +67,7 @@ class GraphClient:
             self.client_id, authority=AUTHORITY, token_cache=self.token_cache
         )
         self.session = requests.Session()
+        self._session_lock = threading.Lock()
 
     def _save_cache(self):
         if self.token_cache.has_state_changed:
@@ -151,15 +153,19 @@ class GraphClient:
         attempt = 0
 
         while True:
+            lock = getattr(self, "_session_lock", None)
+            if lock is None:
+                self._session_lock = lock = threading.Lock()
             try:
-                resp = self.session.request(
-                    method,
-                    url,
-                    headers=self._headers(),
-                    params=params,
-                    json=data,
-                    timeout=self.request_timeout,
-                )
+                with lock:
+                    resp = self.session.request(
+                        method,
+                        url,
+                        headers=self._headers(),
+                        params=params,
+                        json=data,
+                        timeout=self.request_timeout,
+                    )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 if attempt >= transport_retries:
                     raise
