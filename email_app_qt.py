@@ -1,10 +1,4 @@
-import faulthandler
-import os
 import sys
-
-_crash_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash_log.txt")
-_crash_fh = open(_crash_log, "w")
-faulthandler.enable(file=_crash_fh)
 
 try:
     from PySide6.QtWidgets import QApplication

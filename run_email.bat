@@ -2,16 +2,10 @@
 title Genis Email Hub
 cd /d "%~dp0"
 python email_app_qt.py
-set EC=%errorlevel%
-if %EC% neq 0 (
+if errorlevel 1 (
     echo.
-    echo === APP CRASHED (exit code %EC%) ===
-    echo.
-    if exist crash_log.txt (
-        type crash_log.txt
-        echo.
-        echo --- Crash log saved to crash_log.txt ---
-    )
+    echo Error: Make sure Python is installed and dependencies are available.
+    echo Required: pip install -r requirements.txt
     echo.
     pause
 )
