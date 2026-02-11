@@ -1,7 +1,7 @@
 @echo off
 title Genis Email Hub
 cd /d "%~dp0"
-python email_app_qt.py 2> crash_log.txt
+python email_app_qt.py
 set EC=%errorlevel%
 if %EC% neq 0 (
     echo.
