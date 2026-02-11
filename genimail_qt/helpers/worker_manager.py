@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import traceback
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import QMessageBox, QWidget
@@ -23,9 +24,17 @@ class WorkerManager:
         on_result: Callable[[object], None],
         on_error: Callable[[str], None] | None = None,
     ) -> None:
+        active_error_handler = on_error or self._on_worker_error
+
+        def _handle_result(payload: object) -> None:
+            try:
+                on_result(payload)
+            except Exception:
+                active_error_handler(traceback.format_exc())
+
         worker = Worker(fn)
-        worker.signals.result.connect(on_result)
-        worker.signals.error.connect(on_error or self._on_worker_error)
+        worker.signals.result.connect(_handle_result)
+        worker.signals.error.connect(active_error_handler)
         self.thread_pool.start(worker)
 
     def _on_worker_error(self, trace_text: str) -> None:

@@ -3,6 +3,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +14,16 @@ from genimail.paths import CACHE_DB_FILE
 class EmailCache:
     """SQLite-based persistent cache for emails with thread-safe connections."""
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
+    DEFAULT_SEARCH_LIMIT = 2000
 
     def __init__(self, db_path=None):
         self.db_path = db_path or CACHE_DB_FILE
         self._local = threading.local()
+        self._write_lock = threading.RLock()
+        self._connection_registry_lock = threading.Lock()
+        self._all_connections = []
+        self._sqlite_timeout_sec = 10.0
         db_dir = os.path.dirname(self.db_path)
         if db_dir:  # Skip for :memory: or relative paths without directory
             os.makedirs(db_dir, exist_ok=True)
@@ -27,73 +33,172 @@ class EmailCache:
     def conn(self):
         """Thread-local database connection."""
         if not hasattr(self._local, "conn") or self._local.conn is None:
-            self._local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self._local.conn.row_factory = sqlite3.Row
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
+            conn = None
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=self._sqlite_timeout_sec)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                self._ensure_connection_integrity(conn)
+            except sqlite3.DatabaseError as exc:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                if not self._recover_corrupted_database(exc):
+                    raise
+                conn = sqlite3.connect(self.db_path, timeout=self._sqlite_timeout_sec)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                self._ensure_connection_integrity(conn)
+            self._local.conn = conn
+            self._register_connection(conn)
         return self._local.conn
+
+    def _register_connection(self, conn):
+        with self._connection_registry_lock:
+            if conn not in self._all_connections:
+                self._all_connections.append(conn)
+
+    @staticmethod
+    def _integrity_check_ok(conn):
+        row = conn.execute("PRAGMA quick_check").fetchone()
+        if row is None:
+            return False
+        value = row[0] if isinstance(row, (tuple, list)) else row[0]
+        return str(value or "").strip().lower() == "ok"
+
+    def _ensure_connection_integrity(self, conn):
+        if not self._integrity_check_ok(conn):
+            raise sqlite3.DatabaseError("SQLite integrity check failed")
+
+    def _recover_corrupted_database(self, exc):
+        db_path = str(self.db_path or "").strip()
+        if not db_path or db_path == ":memory:":
+            return False
+        if not os.path.exists(db_path):
+            return False
+        try:
+            stamp = int(time.time())
+            corrupt_base = f"{db_path}.corrupt.{stamp}"
+            os.replace(db_path, corrupt_base)
+            for suffix in ("-wal", "-shm"):
+                src = f"{db_path}{suffix}"
+                if os.path.exists(src):
+                    os.replace(src, f"{corrupt_base}{suffix}")
+            logger.exception("Recovered from corrupted cache DB by quarantining files: %s", exc)
+            return True
+        except OSError:
+            logger.exception("Failed to quarantine corrupted cache DB: %s", exc)
+            return False
+
+    @contextmanager
+    def _write_transaction(self, conn=None, immediate=True):
+        active_conn = conn or self.conn
+        with self._write_lock:
+            started_here = not active_conn.in_transaction
+            if started_here:
+                active_conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            try:
+                yield active_conn
+            except Exception:
+                if started_here and active_conn.in_transaction:
+                    active_conn.rollback()
+                raise
+            else:
+                if started_here:
+                    active_conn.commit()
 
     def _init_schema(self):
         """Create database tables if they don't exist."""
         conn = self.conn
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY
-            );
+        with self._write_transaction(conn=conn, immediate=True):
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    folder_id TEXT NOT NULL,
+                    subject TEXT,
+                    sender_name TEXT,
+                    sender_address TEXT,
+                    received_datetime TEXT,
+                    is_read INTEGER DEFAULT 0,
+                    has_attachments INTEGER DEFAULT 0,
+                    body_preview TEXT,
+                    importance TEXT,
+                    company_label TEXT,
+                    cached_at INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS message_bodies (
+                    id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                    content_type TEXT,
+                    content TEXT,
+                    cached_at INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    name TEXT,
+                    size INTEGER,
+                    content_type TEXT,
+                    cached_at INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_state (
+                    folder_id TEXT PRIMARY KEY,
+                    delta_link TEXT,
+                    last_sync INTEGER
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id, received_datetime DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_cached ON messages(cached_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_company ON messages(company_label)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_address)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id)")
 
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                folder_id TEXT NOT NULL,
-                subject TEXT,
-                sender_name TEXT,
-                sender_address TEXT,
-                received_datetime TEXT,
-                is_read INTEGER DEFAULT 0,
-                has_attachments INTEGER DEFAULT 0,
-                body_preview TEXT,
-                importance TEXT,
-                company_label TEXT,
-                cached_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS message_bodies (
-                id TEXT PRIMARY KEY,
-                content_type TEXT,
-                content TEXT,
-                cached_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS attachments (
-                id TEXT PRIMARY KEY,
-                message_id TEXT NOT NULL,
-                name TEXT,
-                size INTEGER,
-                content_type TEXT,
-                cached_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sync_state (
-                folder_id TEXT PRIMARY KEY,
-                delta_link TEXT,
-                last_sync INTEGER
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id, received_datetime DESC);
-            CREATE INDEX IF NOT EXISTS idx_messages_cached ON messages(cached_at);
-            CREATE INDEX IF NOT EXISTS idx_messages_company ON messages(company_label);
-            CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_address);
-            CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
-        """
-        )
         current_version = self._current_schema_version(conn)
-        if current_version < 1:
-            self._migrate_to_v1(conn)
-        if current_version < 2:
-            self._migrate_to_v2(conn)
-        if current_version < 3:
-            self._migrate_to_v3(conn)
-        self._set_schema_version(conn, self.SCHEMA_VERSION)
-        conn.commit()
+        with self._write_transaction(conn=conn, immediate=True):
+            if current_version < 1:
+                self._migrate_to_v1(conn)
+                self._set_schema_version(conn, 1)
+                current_version = 1
+            if current_version < 2:
+                self._migrate_to_v2(conn)
+                self._set_schema_version(conn, 2)
+                current_version = 2
+            if current_version < 3:
+                self._migrate_to_v3(conn)
+                self._set_schema_version(conn, 3)
+                current_version = 3
+            if current_version < 4:
+                self._migrate_to_v4(conn)
+                self._set_schema_version(conn, 4)
+                current_version = 4
+            if current_version != self.SCHEMA_VERSION:
+                self._set_schema_version(conn, self.SCHEMA_VERSION)
 
     @staticmethod
     def _current_schema_version(conn):
@@ -110,35 +215,39 @@ class EmailCache:
     def _migrate_to_v1(conn):
         # Baseline schema is created in _init_schema via CREATE TABLE IF NOT EXISTS.
         _ = conn
+        pass
 
     @staticmethod
     def _migrate_to_v2(conn):
-        conn.executescript(
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS message_recipients (
-                message_id TEXT NOT NULL,
+                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
                 role TEXT NOT NULL,
                 recipient_name TEXT,
                 recipient_address TEXT NOT NULL,
                 cached_at INTEGER NOT NULL,
                 PRIMARY KEY (message_id, role, recipient_address)
-            );
-            CREATE INDEX IF NOT EXISTS idx_message_recipients_message ON message_recipients(message_id);
-            CREATE INDEX IF NOT EXISTS idx_message_recipients_address ON message_recipients(recipient_address);
+            )
             """
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_message_recipients_message ON message_recipients(message_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_message_recipients_address ON message_recipients(recipient_address)")
 
     def _fts5_supported(self, conn=None):
         if hasattr(self, "_fts5_supported_cache"):
             return bool(self._fts5_supported_cache)
+        cache_attr = "fts5_supported_cache"
+        if hasattr(self._local, cache_attr):
+            return bool(getattr(self._local, cache_attr))
         active_conn = conn or self.conn
         try:
             active_conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS __fts5_probe USING fts5(content)")
             active_conn.execute("DROP TABLE IF EXISTS __fts5_probe")
-            self._fts5_supported_cache = True
+            setattr(self._local, cache_attr, True)
         except sqlite3.OperationalError:
-            self._fts5_supported_cache = False
-        return bool(self._fts5_supported_cache)
+            setattr(self._local, cache_attr, False)
+        return bool(getattr(self._local, cache_attr))
 
     @staticmethod
     def _fts_table_exists(conn):
@@ -160,6 +269,105 @@ class EmailCache:
         self._rebuild_search_index(conn)
 
     @staticmethod
+    def _table_has_foreign_key(conn, table_name):
+        rows = conn.execute(f"PRAGMA foreign_key_list({table_name})").fetchall()
+        return bool(rows)
+
+    @staticmethod
+    def _table_exists(conn, table_name):
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def _rebuild_table_with_foreign_key(
+        cls,
+        conn,
+        table_name,
+        create_sql,
+        column_list,
+        fk_predicate,
+        post_create_sql=None,
+    ):
+        if cls._table_has_foreign_key(conn, table_name):
+            return
+        if not cls._table_exists(conn, table_name):
+            conn.execute(create_sql)
+            for statement in post_create_sql or []:
+                conn.execute(statement)
+            return
+
+        old_table_name = f"_old_{table_name}_v4"
+        conn.execute(f"ALTER TABLE {table_name} RENAME TO {old_table_name}")
+        conn.execute(create_sql)
+        columns = ", ".join(column_list)
+        conn.execute(
+            f"""INSERT INTO {table_name} ({columns})
+                SELECT {columns}
+                FROM {old_table_name}
+                WHERE {fk_predicate}"""
+        )
+        conn.execute(f"DROP TABLE {old_table_name}")
+        for statement in post_create_sql or []:
+            conn.execute(statement)
+
+    @classmethod
+    def _migrate_to_v4(cls, conn):
+        cls._rebuild_table_with_foreign_key(
+            conn=conn,
+            table_name="message_bodies",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS message_bodies (
+                    id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                    content_type TEXT,
+                    content TEXT,
+                    cached_at INTEGER NOT NULL
+                )
+            """,
+            column_list=("id", "content_type", "content", "cached_at"),
+            fk_predicate="EXISTS (SELECT 1 FROM messages m WHERE m.id = _old_message_bodies_v4.id)",
+        )
+        cls._rebuild_table_with_foreign_key(
+            conn=conn,
+            table_name="attachments",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    name TEXT,
+                    size INTEGER,
+                    content_type TEXT,
+                    cached_at INTEGER NOT NULL
+                )
+            """,
+            column_list=("id", "message_id", "name", "size", "content_type", "cached_at"),
+            fk_predicate="EXISTS (SELECT 1 FROM messages m WHERE m.id = _old_attachments_v4.message_id)",
+            post_create_sql=("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id)",),
+        )
+        cls._rebuild_table_with_foreign_key(
+            conn=conn,
+            table_name="message_recipients",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS message_recipients (
+                    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    recipient_name TEXT,
+                    recipient_address TEXT NOT NULL,
+                    cached_at INTEGER NOT NULL,
+                    PRIMARY KEY (message_id, role, recipient_address)
+                )
+            """,
+            column_list=("message_id", "role", "recipient_name", "recipient_address", "cached_at"),
+            fk_predicate="EXISTS (SELECT 1 FROM messages m WHERE m.id = _old_message_recipients_v4.message_id)",
+            post_create_sql=(
+                "CREATE INDEX IF NOT EXISTS idx_message_recipients_message ON message_recipients(message_id)",
+                "CREATE INDEX IF NOT EXISTS idx_message_recipients_address ON message_recipients(recipient_address)",
+            ),
+        )
+
+    @staticmethod
     def _fts_query_from_text(text):
         tokens = [token.strip() for token in (text or "").split() if token.strip()]
         if not tokens:
@@ -179,6 +387,16 @@ class EmailCache:
     def _chunked(values, size=SQL_PARAM_CHUNK_SIZE):
         for idx in range(0, len(values), size):
             yield values[idx : idx + size]
+
+    @classmethod
+    def _effective_limit(cls, limit):
+        if limit is None:
+            return cls.DEFAULT_SEARCH_LIMIT
+        try:
+            value = int(limit)
+        except (TypeError, ValueError):
+            return cls.DEFAULT_SEARCH_LIMIT
+        return value if value > 0 else cls.DEFAULT_SEARCH_LIMIT
 
     @staticmethod
     def _unique_message_ids(message_ids):
@@ -471,45 +689,44 @@ class EmailCache:
     def save_messages(self, messages, folder_id):
         """Save messages to cache (batch insert/update)."""
         now = int(time.time())
-        conn = self.conn
         updated_ids = []
-        for msg in messages:
-            msg_id = msg["id"]
-            updated_ids.append(msg_id)
-            sender = msg.get("from", {}).get("emailAddress", {})
-            conn.execute(
-                """INSERT OR REPLACE INTO messages
-                   (id, folder_id, subject, sender_name, sender_address,
-                    received_datetime, is_read, has_attachments, body_preview,
-                    importance, company_label, cached_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           COALESCE((SELECT company_label FROM messages WHERE id = ?), NULL),
-                           ?)""",
-                (
-                    msg_id,
-                    folder_id,
-                    msg.get("subject"),
-                    sender.get("name"),
-                    sender.get("address"),
-                    msg.get("receivedDateTime"),
-                    1 if msg.get("isRead") else 0,
-                    1 if msg.get("hasAttachments") else 0,
-                    msg.get("bodyPreview"),
-                    msg.get("importance"),
-                    msg_id,
-                    now,
-                ),
-            )
-            conn.execute("DELETE FROM message_recipients WHERE message_id = ?", (msg_id,))
-            for role, recipient_name, recipient_address in self._extract_recipients(msg):
+        with self._write_transaction() as conn:
+            for msg in messages:
+                msg_id = msg["id"]
+                updated_ids.append(msg_id)
+                sender = msg.get("from", {}).get("emailAddress", {})
                 conn.execute(
-                    """INSERT OR REPLACE INTO message_recipients
-                       (message_id, role, recipient_name, recipient_address, cached_at)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (msg_id, role, recipient_name, recipient_address, now),
+                    """INSERT OR REPLACE INTO messages
+                       (id, folder_id, subject, sender_name, sender_address,
+                        received_datetime, is_read, has_attachments, body_preview,
+                        importance, company_label, cached_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                               COALESCE((SELECT company_label FROM messages WHERE id = ?), NULL),
+                               ?)""",
+                    (
+                        msg_id,
+                        folder_id,
+                        msg.get("subject"),
+                        sender.get("name"),
+                        sender.get("address"),
+                        msg.get("receivedDateTime"),
+                        1 if msg.get("isRead") else 0,
+                        1 if msg.get("hasAttachments") else 0,
+                        msg.get("bodyPreview"),
+                        msg.get("importance"),
+                        msg_id,
+                        now,
+                    ),
                 )
-        self._upsert_search_index_for_messages(updated_ids, conn=conn)
-        conn.commit()
+                conn.execute("DELETE FROM message_recipients WHERE message_id = ?", (msg_id,))
+                for role, recipient_name, recipient_address in self._extract_recipients(msg):
+                    conn.execute(
+                        """INSERT OR REPLACE INTO message_recipients
+                           (message_id, role, recipient_name, recipient_address, cached_at)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (msg_id, role, recipient_name, recipient_address, now),
+                    )
+            self._upsert_search_index_for_messages(updated_ids, conn=conn)
 
     def get_message_body(self, msg_id):
         """Get cached full message body."""
@@ -521,14 +738,13 @@ class EmailCache:
 
     def save_message_body(self, msg_id, content_type, content):
         """Save full message body to cache."""
-        conn = self.conn
-        conn.execute(
-            """INSERT OR REPLACE INTO message_bodies (id, content_type, content, cached_at)
-               VALUES (?, ?, ?, ?)""",
-            (msg_id, content_type, content, int(time.time())),
-        )
-        self._upsert_search_index_for_messages([msg_id], conn=conn)
-        conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO message_bodies (id, content_type, content, cached_at)
+                   VALUES (?, ?, ?, ?)""",
+                (msg_id, content_type, content, int(time.time())),
+            )
+            self._upsert_search_index_for_messages([msg_id], conn=conn)
 
     def get_attachments(self, msg_id):
         """Get cached attachment metadata for a message."""
@@ -550,67 +766,67 @@ class EmailCache:
     def save_attachments(self, msg_id, attachments):
         """Save attachment metadata to cache."""
         now = int(time.time())
-        conn = self.conn
-        for att in attachments:
-            if att.get("@odata.type") == "#microsoft.graph.fileAttachment":
-                conn.execute(
-                    """INSERT OR REPLACE INTO attachments
-                       (id, message_id, name, size, content_type, cached_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        att["id"],
-                        msg_id,
-                        att.get("name"),
-                        att.get("size"),
-                        att.get("contentType"),
-                        now,
-                    ),
-                )
-        conn.commit()
+        with self._write_transaction() as conn:
+            for att in attachments:
+                if att.get("@odata.type") == "#microsoft.graph.fileAttachment":
+                    conn.execute(
+                        """INSERT OR REPLACE INTO attachments
+                           (id, message_id, name, size, content_type, cached_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            att["id"],
+                            msg_id,
+                            att.get("name"),
+                            att.get("size"),
+                            att.get("contentType"),
+                            now,
+                        ),
+                    )
 
     def update_read_status(self, msg_id, is_read):
         """Update read status in cache."""
-        self.conn.execute("UPDATE messages SET is_read = ? WHERE id = ?", (1 if is_read else 0, msg_id))
-        self.conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute("UPDATE messages SET is_read = ? WHERE id = ?", (1 if is_read else 0, msg_id))
 
     def delete_messages(self, message_ids):
         """Remove deleted messages from cache."""
         if not message_ids:
             return
-        placeholders = ",".join("?" * len(message_ids))
-        conn = self.conn
-        ids_tuple = tuple(message_ids)
-        conn.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", ids_tuple)
-        conn.execute(f"DELETE FROM message_bodies WHERE id IN ({placeholders})", ids_tuple)
-        conn.execute(f"DELETE FROM attachments WHERE message_id IN ({placeholders})", ids_tuple)
-        conn.execute(f"DELETE FROM message_recipients WHERE message_id IN ({placeholders})", ids_tuple)
-        if self._is_fts_enabled(conn):
-            conn.execute(f"DELETE FROM message_search_fts WHERE message_id IN ({placeholders})", ids_tuple)
-        conn.commit()
+        unique_ids = self._unique_message_ids(message_ids)
+        if not unique_ids:
+            return
+        with self._write_transaction() as conn:
+            for chunk in self._chunked(unique_ids):
+                placeholders = ",".join("?" for _ in chunk)
+                ids_tuple = tuple(chunk)
+                conn.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", ids_tuple)
+                conn.execute(f"DELETE FROM message_bodies WHERE id IN ({placeholders})", ids_tuple)
+                conn.execute(f"DELETE FROM attachments WHERE message_id IN ({placeholders})", ids_tuple)
+                conn.execute(f"DELETE FROM message_recipients WHERE message_id IN ({placeholders})", ids_tuple)
+                if self._is_fts_enabled(conn):
+                    conn.execute(f"DELETE FROM message_search_fts WHERE message_id IN ({placeholders})", ids_tuple)
 
     def prune_old(self, days=30):
         """Delete cache entries older than N days."""
         cutoff = int(time.time()) - (days * 24 * 60 * 60)
-        conn = self.conn
-        conn.execute("DELETE FROM messages WHERE cached_at < ?", (cutoff,))
-        conn.execute("DELETE FROM message_bodies WHERE cached_at < ?", (cutoff,))
-        conn.execute("DELETE FROM attachments WHERE cached_at < ?", (cutoff,))
-        conn.execute("DELETE FROM message_recipients WHERE message_id NOT IN (SELECT id FROM messages)")
-        if self._is_fts_enabled(conn):
-            conn.execute("DELETE FROM message_search_fts WHERE message_id NOT IN (SELECT id FROM messages)")
-        conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute("DELETE FROM messages WHERE cached_at < ?", (cutoff,))
+            conn.execute("DELETE FROM message_bodies WHERE cached_at < ?", (cutoff,))
+            conn.execute("DELETE FROM attachments WHERE cached_at < ?", (cutoff,))
+            conn.execute("DELETE FROM message_recipients WHERE message_id NOT IN (SELECT id FROM messages)")
+            if self._is_fts_enabled(conn):
+                conn.execute("DELETE FROM message_search_fts WHERE message_id NOT IN (SELECT id FROM messages)")
 
     def clear(self):
         """Reset entire cache."""
-        conn = self.conn
-        conn.execute("DELETE FROM messages")
-        conn.execute("DELETE FROM message_bodies")
-        conn.execute("DELETE FROM attachments")
-        conn.execute("DELETE FROM message_recipients")
-        if self._is_fts_enabled(conn):
-            conn.execute("DELETE FROM message_search_fts")
-        conn.execute("DELETE FROM sync_state")
-        conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute("DELETE FROM messages")
+            conn.execute("DELETE FROM message_bodies")
+            conn.execute("DELETE FROM attachments")
+            conn.execute("DELETE FROM message_recipients")
+            if self._is_fts_enabled(conn):
+                conn.execute("DELETE FROM message_search_fts")
+            conn.execute("DELETE FROM sync_state")
 
     def search_by_domain(self, domain):
         """Find all emails from a specific domain."""
@@ -649,6 +865,7 @@ class EmailCache:
         normalized = (query or "").strip().lower()
         if not normalized:
             return []
+        effective_limit = self._effective_limit(limit)
 
         normalized_search = (search_text or "").strip().lower()
         if normalized_search:
@@ -657,28 +874,29 @@ class EmailCache:
                     return self._search_company_messages_fts(
                         normalized,
                         normalized_search,
-                        limit=limit,
+                        limit=effective_limit,
                     )
                 except sqlite3.OperationalError as exc:
                     logger.warning("FTS search failed, falling back to LIKE: %s", exc)
             return self._search_company_messages_like(
                 normalized,
                 search_text=normalized_search,
-                limit=limit,
+                limit=effective_limit,
             )
-        return self._search_company_messages_like(normalized, limit=limit)
+        return self._search_company_messages_like(normalized, limit=effective_limit)
 
     def search_messages(self, search_text, folder_id=None, limit=None):
         """Search all cached messages by text across subject, body, sender, recipients."""
         normalized = (search_text or "").strip().lower()
         if not normalized:
             return []
+        effective_limit = self._effective_limit(limit)
         if self._is_fts_enabled():
             try:
-                return self._search_messages_fts(normalized, folder_id, limit)
+                return self._search_messages_fts(normalized, folder_id, effective_limit)
             except sqlite3.OperationalError as exc:
                 logger.warning("FTS search failed, falling back to LIKE: %s", exc)
-        return self._search_messages_like(normalized, folder_id, limit)
+        return self._search_messages_like(normalized, folder_id, effective_limit)
 
     def _search_messages_fts(self, search_text, folder_id=None, limit=None):
         fts_query = self._fts_query_from_text(search_text)
@@ -743,11 +961,11 @@ class EmailCache:
 
     def label_domain(self, domain, label):
         """Bulk-label all emails from a domain."""
-        cur = self.conn.execute(
-            "UPDATE messages SET company_label = ? WHERE sender_address LIKE ?",
-            (label, f"%@{domain}"),
-        )
-        self.conn.commit()
+        with self._write_transaction() as conn:
+            cur = conn.execute(
+                "UPDATE messages SET company_label = ? WHERE sender_address LIKE ?",
+                (label, f"%@{domain}"),
+            )
         return cur.rowcount
 
     def get_all_domains(self):
@@ -789,8 +1007,13 @@ class EmailCache:
 
     def clear_delta_links(self):
         """Remove all stored delta links, forcing a full re-sync on next init."""
-        self.conn.execute("DELETE FROM sync_state")
-        self.conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute("DELETE FROM sync_state")
+
+    def clear_delta_link(self, folder_id):
+        """Remove stored delta link for a specific folder."""
+        with self._write_transaction() as conn:
+            conn.execute("DELETE FROM sync_state WHERE folder_id = ?", (folder_id,))
 
     def get_delta_link(self, folder_id):
         """Get stored delta link for a folder."""
@@ -800,9 +1023,22 @@ class EmailCache:
 
     def save_delta_link(self, folder_id, delta_link):
         """Store delta link for a folder."""
-        self.conn.execute(
-            """INSERT OR REPLACE INTO sync_state (folder_id, delta_link, last_sync)
-               VALUES (?, ?, ?)""",
-            (folder_id, delta_link, int(time.time())),
-        )
-        self.conn.commit()
+        with self._write_transaction() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO sync_state (folder_id, delta_link, last_sync)
+                   VALUES (?, ?, ?)""",
+                (folder_id, delta_link, int(time.time())),
+            )
+
+    def close(self):
+        current_conn = getattr(self._local, "conn", None)
+        with self._connection_registry_lock:
+            connections = list(self._all_connections)
+            self._all_connections = []
+        for conn in connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        if current_conn is not None:
+            self._local.conn = None

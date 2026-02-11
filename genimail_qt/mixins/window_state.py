@@ -16,6 +16,18 @@ class WindowStateMixin:
 
     def closeEvent(self, event):
         self._poll_timer.stop()
+        if hasattr(self, "thread_pool"):
+            self.thread_pool.waitForDone(2000)
+        graph = getattr(self, "graph", None)
+        if graph is not None:
+            close_graph = getattr(graph, "close", None)
+            if callable(close_graph):
+                close_graph()
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            close_cache = getattr(cache, "close", None)
+            if callable(close_cache):
+                close_cache()
         self.config.set("qt_window_geometry", f"{self.width()}x{self.height()}")
         super().closeEvent(event)
 

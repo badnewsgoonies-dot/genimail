@@ -1,5 +1,3 @@
-import threading
-
 from PySide6.QtCore import QEvent, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMainWindow
 
@@ -70,7 +68,7 @@ class GeniMailQtWindow(
         self._web_page_sources = {}
         self._download_profile_ids = set()
         self._poll_in_flight = False
-        self._poll_lock = threading.Lock()
+        self._poll_generation = 0
         self.thread_pool = QThreadPool(self)
         self.thread_pool.setMaxThreadCount(QT_THREAD_POOL_MAX_WORKERS)
         self._poll_timer = QTimer(self)

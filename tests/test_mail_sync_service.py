@@ -10,6 +10,7 @@ class DummyCache:
         self.saved_delta = None
         self.deleted_ids = []
         self.saved_messages = []
+        self.cleared_delta_links = []
 
     def get_delta_link(self, folder_id):
         return self.delta_links.get(folder_id)
@@ -19,6 +20,14 @@ class DummyCache:
         self.delta_links[folder_id] = delta_link
         if folder_id == "inbox":
             self.delta = delta_link
+
+    def clear_delta_link(self, folder_id):
+        self.cleared_delta_links.append(folder_id)
+        self.delta_links.pop(folder_id, None)
+
+    def clear_delta_links(self):
+        self.cleared_delta_links.append("*")
+        self.delta_links.clear()
 
     def delete_messages(self, message_ids):
         self.deleted_ids.extend(message_ids)
@@ -123,6 +132,7 @@ def test_sync_delta_once_falls_back_when_delta_expired():
     assert messages == graph.messages
     assert deleted == []
     assert graph.get_messages_calls == 1
+    assert cache.cleared_delta_links == ["inbox"]
 
 
 def test_collect_new_unread_tracks_known_ids():

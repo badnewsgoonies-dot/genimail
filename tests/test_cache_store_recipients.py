@@ -14,6 +14,8 @@ def test_schema_version_and_recipient_table_present(tmp_path):
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'message_recipients'"
     ).fetchone()
     assert table_row is not None
+    fk_enabled = cache.conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    assert fk_enabled == 1
 
 
 def test_save_and_load_messages_include_recipients_and_domain_search(tmp_path):
@@ -197,7 +199,7 @@ def test_search_company_messages_default_does_not_truncate_large_result_sets(tmp
     assert len(results) == 520
 
 
-def test_legacy_schema_v1_migrates_to_v3_without_data_loss(tmp_path):
+def test_legacy_schema_v1_migrates_to_latest_without_data_loss(tmp_path):
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(
@@ -270,7 +272,54 @@ def test_legacy_schema_v1_migrates_to_v3_without_data_loss(tmp_path):
     cache = EmailCache(db_path=str(db_path))
 
     version_row = cache.conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
-    assert version_row["version"] == 3
+    assert version_row["version"] == EmailCache.SCHEMA_VERSION
 
     migrated = cache.get_messages("inbox")
     assert [msg["id"] for msg in migrated] == ["legacy-1"]
+
+
+def test_clear_single_delta_link_only_affects_target_folder(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    cache.save_delta_link("inbox", "delta-inbox")
+    cache.save_delta_link("sentitems", "delta-sent")
+
+    cache.clear_delta_link("inbox")
+
+    assert cache.get_delta_link("inbox") is None
+    assert cache.get_delta_link("sentitems") == "delta-sent"
+
+
+def test_close_resets_connection_and_allows_reopen(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    _ = cache.conn
+
+    cache.close()
+
+    assert getattr(cache._local, "conn", None) is None
+    assert cache.get_message_count() == 0
+
+
+def test_delete_messages_handles_large_batches_with_chunking(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    messages = []
+    for idx in range(1105):
+        messages.append(
+            {
+                "id": f"chunk-{idx}",
+                "subject": f"Chunk {idx}",
+                "from": {"emailAddress": {"name": "Sender", "address": "sender@example.com"}},
+                "toRecipients": [],
+                "ccRecipients": [],
+                "receivedDateTime": f"2026-01-01T00:{idx % 60:02d}:00Z",
+                "isRead": False,
+                "hasAttachments": False,
+                "bodyPreview": "bulk",
+                "importance": "normal",
+            }
+        )
+    cache.save_messages(messages, folder_id="inbox")
+
+    all_ids = [msg["id"] for msg in messages]
+    cache.delete_messages(all_ids)
+
+    assert cache.get_message_count("inbox") == 0

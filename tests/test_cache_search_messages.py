@@ -101,3 +101,12 @@ def test_search_messages_like_fallback_when_fts_disabled(tmp_path):
     cache._fts5_supported_cache = False
     results = cache.search_messages("invoice")
     assert [msg["id"] for msg in results] == ["m1"]
+
+
+def test_search_messages_default_limit_applies_when_unspecified(tmp_path):
+    cache = EmailCache(db_path=str(tmp_path / "cache.db"))
+    messages = [_make_msg(f"m{i}", subject="Report") for i in range(2100)]
+    cache.save_messages(messages, folder_id="inbox")
+
+    results = cache.search_messages("report")
+    assert len(results) == EmailCache.DEFAULT_SEARCH_LIMIT

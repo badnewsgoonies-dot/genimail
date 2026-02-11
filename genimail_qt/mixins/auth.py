@@ -60,8 +60,12 @@ class AuthPollMixin:
     def _reconnect(self):
         self._poll_timer.stop()
         self._poll_in_flight = False
+        self._poll_generation = getattr(self, "_poll_generation", 0) + 1
         if self.graph is not None:
             self.graph.clear_cached_tokens()
+            close_graph = getattr(self.graph, "close", None)
+            if callable(close_graph):
+                close_graph()
         else:
             client_id = (self.config.get("client_id") or "").strip() or DEFAULT_CLIENT_ID
             cache_path = token_cache_path_for_client_id(client_id)
@@ -144,8 +148,10 @@ class AuthPollMixin:
     def _start_polling(self):
         if not self.sync_service:
             return
+        self._poll_generation = getattr(self, "_poll_generation", 0) + 1
+        self._poll_in_flight = False
         self._set_status("Connected. Sync active.")
-        self.workers.submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_poll_error)
+        self.workers.submit(self._init_delta_token_worker, self._on_delta_token_ready, self._on_delta_token_error)
         self._poll_timer.start()
 
     def _init_delta_token_worker(self):
@@ -179,82 +185,97 @@ class AuthPollMixin:
     def _poll_once(self):
         if not self.sync_service:
             return
-        if not self._poll_lock.acquire(blocking=False):
-            return
         if self._poll_in_flight:
-            self._poll_lock.release()
             return
+        generation = getattr(self, "_poll_generation", 0)
         self._poll_in_flight = True
-        self.workers.submit(self._poll_worker, self._on_poll_result, self._on_poll_error)
+        self.workers.submit(
+            lambda: self._poll_worker(generation),
+            self._on_poll_result,
+            lambda trace_text, poll_generation=generation: self._on_poll_error(trace_text, poll_generation),
+        )
 
-    def _poll_worker(self):
-        return self.sync_service.sync_delta_for_folders(
+    def _poll_worker(self, poll_generation):
+        payload = self.sync_service.sync_delta_for_folders(
             folder_ids=self._collect_sync_folder_ids(),
             fallback_top=EMAIL_DELTA_FALLBACK_TOP,
             primary_folder_id=self._resolve_inbox_id(),
         )
+        if isinstance(payload, dict):
+            payload["_poll_generation"] = poll_generation
+            return payload
+        return {"_poll_generation": poll_generation}
+
+    def _on_delta_token_error(self, trace_text):
+        self._set_status("Connected. Delta sync initialization warning.")
+        print(trace_text)
 
     def _on_poll_result(self, payload):
-        self._poll_in_flight = False
-        self._poll_lock.release()
+        try:
+            if not isinstance(payload, dict):
+                return
+            if payload.get("_poll_generation") != getattr(self, "_poll_generation", 0):
+                return
 
-        all_updates = payload.get("all_messages") or []
-        all_deleted_ids = payload.get("all_deleted_ids") or []
-        updates_by_folder = payload.get("updates_by_folder") or {}
-        deleted_by_folder = payload.get("deleted_by_folder") or {}
-        errors = payload.get("errors") or []
-        if errors:
-            print("[SYNC] partial folder errors:")
-            for line in errors:
-                print(f"[SYNC] {line}")
+            all_updates = payload.get("all_messages") or []
+            all_deleted_ids = payload.get("all_deleted_ids") or []
+            updates_by_folder = payload.get("updates_by_folder") or {}
+            deleted_by_folder = payload.get("deleted_by_folder") or {}
+            errors = payload.get("errors") or []
+            if errors:
+                print("[SYNC] partial folder errors:")
+                for line in errors:
+                    print(f"[SYNC] {line}")
 
-        # Track new unread across ALL folders for notification badge.
-        new_unread = collect_new_unread(all_updates, self.known_ids)
-        for msg_id in all_deleted_ids:
-            self.known_ids.discard(msg_id)
+            # Track new unread across ALL folders for notification badge.
+            new_unread = collect_new_unread(all_updates, self.known_ids)
+            for msg_id in all_deleted_ids:
+                self.known_ids.discard(msg_id)
 
-        # Company filter mode: don't update the message list (separate UI path).
-        if self.company_filter_domain:
+            # Company filter mode: don't update the message list (separate UI path).
+            if self.company_filter_domain:
+                if new_unread:
+                    self._set_status(f"{len(new_unread)} new unread message(s)")
+                elif all_updates or all_deleted_ids:
+                    self._set_status("Connected. Sync up to date.")
+                return
+
+            # Resolve which folder's updates to apply to the active message list.
+            active_updates = updates_by_folder.get(self.current_folder_id, [])
+            active_deletes = deleted_by_folder.get(self.current_folder_id, [])
+
+            if active_deletes:
+                deleted_set = set(active_deletes)
+                self.current_messages = [msg for msg in self.current_messages if msg.get("id") not in deleted_set]
+                for msg_id in deleted_set:
+                    self.message_cache.pop(msg_id, None)
+                    self.attachment_cache.pop(msg_id, None)
+
+            if active_updates or active_deletes:
+                index_by_id = {msg.get("id"): idx for idx, msg in enumerate(self.current_messages) if msg.get("id")}
+                for msg in active_updates:
+                    msg_id = msg.get("id")
+                    if not msg_id:
+                        continue
+                    idx = index_by_id.get(msg_id)
+                    if idx is None:
+                        self.current_messages.insert(0, msg)
+                    else:
+                        self.current_messages[idx] = msg
+                self._render_message_list()
+                if self.message_list.count() == 0:
+                    self._show_message_list()
+                    self._clear_detail_view("No messages in this folder.")
+                self._ensure_detail_message_visible()
+
             if new_unread:
                 self._set_status(f"{len(new_unread)} new unread message(s)")
-            elif all_updates or all_deleted_ids:
+            else:
                 self._set_status("Connected. Sync up to date.")
-            return
 
-        # Resolve which folder's updates to apply to the active message list.
-        active_updates = updates_by_folder.get(self.current_folder_id, [])
-        active_deletes = deleted_by_folder.get(self.current_folder_id, [])
-
-        if active_deletes:
-            deleted_set = set(active_deletes)
-            self.current_messages = [msg for msg in self.current_messages if msg.get("id") not in deleted_set]
-            for msg_id in deleted_set:
-                self.message_cache.pop(msg_id, None)
-                self.attachment_cache.pop(msg_id, None)
-
-        if active_updates or active_deletes:
-            index_by_id = {msg.get("id"): idx for idx, msg in enumerate(self.current_messages) if msg.get("id")}
-            for msg in active_updates:
-                msg_id = msg.get("id")
-                if not msg_id:
-                    continue
-                idx = index_by_id.get(msg_id)
-                if idx is None:
-                    self.current_messages.insert(0, msg)
-                else:
-                    self.current_messages[idx] = msg
-            self._render_message_list()
-            if self.message_list.count() == 0:
-                self._show_message_list()
-                self._clear_detail_view("No messages in this folder.")
-            self._ensure_detail_message_visible()
-
-        if new_unread:
-            self._set_status(f"{len(new_unread)} new unread message(s)")
-        else:
-            self._set_status("Connected. Sync up to date.")
-
-        self._prune_known_ids()
+            self._prune_known_ids()
+        finally:
+            self._poll_in_flight = False
 
     def _prune_known_ids(self, max_size=5000):
         """Prevent known_ids from growing without bound.
@@ -269,10 +290,10 @@ class AuthPollMixin:
         active_ids = {msg.get("id") for msg in self.current_messages if msg.get("id")}
         self.known_ids = active_ids
 
-    def _on_poll_error(self, trace_text):
+    def _on_poll_error(self, trace_text, poll_generation=None):
+        if poll_generation is not None and poll_generation != getattr(self, "_poll_generation", 0):
+            return
         self._poll_in_flight = False
-        if self._poll_lock.locked():
-            self._poll_lock.release()
         self._set_status("Sync warning. Retrying...")
         print(trace_text)
 

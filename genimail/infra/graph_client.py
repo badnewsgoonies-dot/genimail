@@ -1,5 +1,8 @@
 import os
+import time
 import webbrowser
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 
 try:
     import msal
@@ -33,6 +36,9 @@ class GraphClient:
         on_device_code=None,
         request_timeout=(HTTP_CONNECT_TIMEOUT_SEC, HTTP_READ_TIMEOUT_SEC),
         get_retries=HTTP_GET_RETRIES,
+        rate_limit_retries=3,
+        max_retry_after_sec=30,
+        max_delta_pages=200,
     ):
         if msal is None or requests is None:
             missing = []
@@ -48,6 +54,9 @@ class GraphClient:
         self.on_device_code = on_device_code
         self.request_timeout = request_timeout
         self.get_retries = max(0, int(get_retries or 0))
+        self.rate_limit_retries = max(0, int(rate_limit_retries or 0))
+        self.max_retry_after_sec = max(1, int(max_retry_after_sec or 1))
+        self.max_delta_pages = max(1, int(max_delta_pages or 1))
         self.token_cache_file = token_cache_path_for_client_id(self.client_id)
         self.token_cache = msal.SerializableTokenCache()
         if os.path.exists(self.token_cache_file):
@@ -101,9 +110,44 @@ class GraphClient:
     def _headers(self):
         return {"Authorization": f"Bearer {self.access_token}", "Content-Type": "application/json"}
 
+    @staticmethod
+    def _retry_after_to_seconds(raw_value):
+        text = str(raw_value or "").strip()
+        if not text:
+            return 1
+        try:
+            return max(0, int(text))
+        except ValueError:
+            try:
+                parsed = parsedate_to_datetime(text)
+            except (TypeError, ValueError, OverflowError):
+                return 1
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return max(0, int(parsed.timestamp() - time.time()))
+
+    def _sleep_for_retry_after(self, response):
+        headers = getattr(response, "headers", {}) or {}
+        retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
+        max_retry_after_sec = max(1, int(getattr(self, "max_retry_after_sec", 30) or 30))
+        delay = min(max_retry_after_sec, self._retry_after_to_seconds(retry_after))
+        time.sleep(delay)
+
+    @staticmethod
+    def _json_or_error(response, endpoint):
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid JSON response from Graph endpoint: {endpoint}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected JSON shape from Graph endpoint: {endpoint}")
+        return payload
+
     def _request(self, method, url, params=None, data=None, allow_410=False):
         auth_retried = False
         transport_retries = self.get_retries if method.upper() == "GET" else 0
+        rate_limit_retries = getattr(self, "rate_limit_retries", 3)
+        rate_limit_attempt = 0
         attempt = 0
 
         while True:
@@ -129,11 +173,16 @@ class GraphClient:
             if allow_410 and resp.status_code == 410:
                 return resp
 
+            if resp.status_code == 429 and rate_limit_attempt < max(0, int(rate_limit_retries or 0)):
+                rate_limit_attempt += 1
+                self._sleep_for_retry_after(resp)
+                continue
+
             resp.raise_for_status()
             return resp
 
     def _get(self, url, params=None):
-        return self._request("GET", url, params=params).json()
+        return self._json_or_error(self._request("GET", url, params=params), url)
 
     def _post(self, url, data):
         return self._request("POST", url, data=data)
@@ -226,22 +275,51 @@ class GraphClient:
 
         messages = []
         deleted_ids = []
+        seen_links = set()
+        max_pages = max(1, int(getattr(self, "max_delta_pages", 200) or 200))
+        pages_seen = 0
 
         while url:
+            if url in seen_links:
+                raise RuntimeError("Delta pagination cycle detected.")
+            seen_links.add(url)
+            pages_seen += 1
+            if pages_seen > max_pages:
+                raise RuntimeError("Delta pagination exceeded maximum page limit.")
+
             resp = self._request("GET", url, params=params, allow_410=True)
             if resp.status_code == 410:
                 return None, None, None
-            data = resp.json()
+            data = self._json_or_error(resp, url)
 
-            for item in data.get("value", []):
+            items = data.get("value") or []
+            if not isinstance(items, list):
+                raise RuntimeError("Malformed delta payload: expected list in 'value'.")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                msg_id = item.get("id")
                 if "@removed" in item:
-                    deleted_ids.append(item["id"])
+                    if msg_id:
+                        deleted_ids.append(msg_id)
                 else:
                     messages.append(item)
 
-            url = data.get("@odata.nextLink")
+            next_link = data.get("@odata.nextLink")
+            if next_link is not None and not isinstance(next_link, str):
+                raise RuntimeError("Malformed delta payload: '@odata.nextLink' must be a string.")
+            url = next_link
             params = None
             if "@odata.deltaLink" in data:
-                return messages, data["@odata.deltaLink"], deleted_ids
+                new_delta_link = data["@odata.deltaLink"]
+                if not isinstance(new_delta_link, str):
+                    raise RuntimeError("Malformed delta payload: '@odata.deltaLink' must be a string.")
+                return messages, new_delta_link, deleted_ids
 
         return messages, None, deleted_ids
+
+    def close(self):
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.close()
+            self.session = None

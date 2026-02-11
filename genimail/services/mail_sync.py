@@ -34,8 +34,17 @@ class MailSyncService:
         )
 
         if messages is None:
-            messages, _ = self.graph.get_messages(folder_id=folder_id, top=fallback_top)
-            _, new_delta_link, _ = self.graph.get_messages_delta(folder_id=folder_id)
+            clear_delta_link = getattr(self.cache, "clear_delta_link", None)
+            if callable(clear_delta_link):
+                clear_delta_link(folder_id)
+            else:
+                self.cache.clear_delta_links()
+            messages, new_delta_link, deleted_ids = self.graph.get_messages_delta(folder_id=folder_id)
+            if messages is None:
+                messages, _ = self.graph.get_messages(folder_id=folder_id, top=fallback_top)
+                _, new_delta_link, _ = self.graph.get_messages_delta(folder_id=folder_id)
+            elif not messages:
+                messages, _ = self.graph.get_messages(folder_id=folder_id, top=fallback_top)
 
         if new_delta_link:
             self.cache.save_delta_link(folder_id, new_delta_link)
