@@ -66,8 +66,16 @@ class GraphClient:
         self.app = msal.PublicClientApplication(
             self.client_id, authority=AUTHORITY, token_cache=self.token_cache
         )
-        self.session = requests.Session()
-        self._session_lock = threading.Lock()
+        self._thread_local = threading.local()
+
+    @property
+    def session(self):
+        """Return a per-thread requests.Session (SSL contexts are not thread-safe)."""
+        local = self._thread_local
+        s = getattr(local, "session", None)
+        if s is None:
+            local.session = s = requests.Session()
+        return s
 
     def _save_cache(self):
         if self.token_cache.has_state_changed:
@@ -153,19 +161,15 @@ class GraphClient:
         attempt = 0
 
         while True:
-            lock = getattr(self, "_session_lock", None)
-            if lock is None:
-                self._session_lock = lock = threading.Lock()
             try:
-                with lock:
-                    resp = self.session.request(
-                        method,
-                        url,
-                        headers=self._headers(),
-                        params=params,
-                        json=data,
-                        timeout=self.request_timeout,
-                    )
+                resp = self.session.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    params=params,
+                    json=data,
+                    timeout=self.request_timeout,
+                )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 if attempt >= transport_retries:
                     raise
@@ -325,7 +329,9 @@ class GraphClient:
         return messages, None, deleted_ids
 
     def close(self):
-        session = getattr(self, "session", None)
-        if session is not None:
-            session.close()
-            self.session = None
+        local = getattr(self, "_thread_local", None)
+        if local is not None:
+            s = getattr(local, "session", None)
+            if s is not None:
+                s.close()
+                local.session = None

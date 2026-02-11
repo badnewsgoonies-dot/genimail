@@ -1,6 +1,14 @@
+import threading
+
 import pytest
 
 from genimail.infra import graph_client
+
+
+def _set_session(client, session):
+    """Inject a fake session into a GraphClient stub."""
+    client._thread_local = threading.local()
+    client._thread_local.session = session
 
 
 def test_graph_client_requires_dependencies(monkeypatch):
@@ -46,7 +54,7 @@ def test_request_retries_auth_after_401(monkeypatch):
         auth_calls["count"] += 1
         return True
 
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = _authenticate
     client.request_timeout = (1, 1)
@@ -70,7 +78,7 @@ def test_request_retries_get_on_timeout():
                 raise graph_client.requests.exceptions.Timeout("slow")
             return _FakeResponse(200, {"ok": True})
 
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = lambda: False
     client.request_timeout = (1, 1)
@@ -89,7 +97,7 @@ def test_request_allow_410_returns_response():
         def request(*_args, **_kwargs):
             return _FakeResponse(410)
 
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = lambda: False
     client.request_timeout = (1, 1)
@@ -116,7 +124,7 @@ def test_request_retries_on_429_retry_after(monkeypatch):
             return response
 
     monkeypatch.setattr(graph_client.time, "sleep", lambda sec: sleeps.append(sec))
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = lambda: False
     client.request_timeout = (1, 1)
@@ -138,7 +146,7 @@ def test_get_raises_for_invalid_json_payload():
         def request(*_args, **_kwargs):
             return _FakeResponse(200, json_error=ValueError("bad json"))
 
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = lambda: False
     client.request_timeout = (1, 1)
@@ -166,7 +174,7 @@ def test_get_messages_delta_detects_pagination_cycle():
                 },
             )
 
-    client.session = _Session()
+    _set_session(client, _Session())
     client._headers = lambda: {"Authorization": "Bearer token"}
     client.authenticate = lambda: False
     client.request_timeout = (1, 1)
